@@ -118,7 +118,10 @@ function App() {
         setMessages([
             ...messages,
             { text: input, sender: "user" },
-            { text: await invoke("greet", { name: input }), sender: "system" },
+            {
+                text: await invoke("chat", { question: input }),
+                sender: "system",
+            },
         ]);
     }
 
