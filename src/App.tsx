@@ -3,7 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 import DarkSVG from "./dark.svg";
 import LightSVG from "./light.svg";
+import Logo from "../src-tauri/icons/icon.png";
+import UserAvatar from "./user.png";
 import { ScrollArea } from "./scroll-area";
+
+type Message = {
+    text: string;
+    sender: "user" | "system";
+};
 
 function TopBar({
     onClear,
@@ -39,18 +46,32 @@ function TopBar({
         </div>
     );
 }
-const ChatHistory = ({ messages }: { messages: string[] }) => (
+
+const QuestionRow = ({ question }: { question: string }) => (
+    <div className="flex justify-items-end items-center gap-2 p-4 bg-gray-200 dark:bg-stone-800">
+        <p className="flex-1"></p>
+        <p className="text-gray-800 dark:text-white">{question}</p>
+        <img src={UserAvatar} className="w-8 h-8 rounded-full" />
+    </div>
+);
+
+const ResponseRow = ({ response }: { response: string }) => (
+    <div className="flex items-center gap-2 p-4 dark:bg-stone-900">
+        <img src={Logo} className="flex-shrink-0 w-8 h-8 rounded-full" />
+        <p className="flex-1 text-gray-800 dark:text-white">{response}</p>
+    </div>
+);
+
+const ChatHistory = ({ messages }: { messages: Message[] }) => (
     <ScrollArea className="flex-1 overflow-y-auto p-4 bg-white dark:bg-stone-900 shadow-inner justify-center">
         {messages.length > 0 ? (
-            messages.map((msg, index) => (
-                // auto wrap text
-                <p
-                    key={index}
-                    className="max-w-3xl mx-auto mb-2 text-gray-800 dark:text-white break-words"
-                >
-                    {msg}
-                </p>
-            ))
+            messages.map((message, index) =>
+                message.sender === "user" ? (
+                    <QuestionRow key={index} question={message.text} />
+                ) : (
+                    <ResponseRow key={index} response={message.text} />
+                )
+            )
         ) : (
             <p className="text-gray-400 dark:text-white">
                 What do you want to ask me?
@@ -89,12 +110,16 @@ function UserInput({
 }
 
 function App() {
-    const [messages, setMessages] = useState<string[]>([]);
+    const [messages, setMessages] = useState<Message[]>([]);
 
     const [theme, setTheme] = useState("dark");
 
     async function greet(input: string) {
-        setMessages([...messages, await invoke("greet", { name: input })]);
+        setMessages([
+            ...messages,
+            { text: input, sender: "user" },
+            { text: await invoke("greet", { name: input }), sender: "system" },
+        ]);
     }
 
     return (

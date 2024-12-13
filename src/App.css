@@ -24,6 +24,7 @@
     --destructive-foreground: 210 40% 98%;
     --ring: 215 20.2% 65.1%;
     --radius: 0.5rem;
+    font-family: serif;
   }
 
   .dark {
@@ -54,6 +55,9 @@
     @apply border-border;
   }
   body {
-    @apply font-sans antialiased bg-background text-foreground;
+    @apply font-medium antialiased bg-background text-foreground;
+  }
+  .dark {
+    @apply font-sans font-light
   }
 }
