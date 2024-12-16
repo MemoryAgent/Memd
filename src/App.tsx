@@ -82,13 +82,21 @@ const ChatHistory = ({ messages }: { messages: Message[] }) => (
 
 function UserInput({
     inputHandler,
+    uploadHandler,
 }: {
     inputHandler: (input: string) => void;
+    uploadHandler?: () => void;
 }) {
     const [input, setInput] = useState("");
     return (
         <div className="p-4 bg-gray-200 dark:bg-stone-900 border-t border-gray-300 dark:border-black">
             <div className="flex items-center gap-2">
+                <button
+                    onClick={uploadHandler}
+                    className="px-4 py-2 text-black dark:text-white bg-white dark:bg-black rounded-lg hover:bg-gray-300 focus:ring focus:ring-gray-600"
+                >
+                    Upload
+                </button>
                 <input
                     type="text"
                     value={input}
@@ -109,6 +117,15 @@ function UserInput({
     );
 }
 
+async function invokeErr<T>(cmd: string, args?: any) {
+    try {
+        return await invoke<T>(cmd, args);
+    } catch (e) {
+        console.error(e);
+        return `An error occurred: ${e}`;
+    }
+}
+
 function App() {
     const [messages, setMessages] = useState<Message[]>([]);
 
@@ -119,10 +136,16 @@ function App() {
             ...messages,
             { text: input, sender: "user" },
             {
-                text: await invoke("chat", { question: input }),
+                text: await invokeErr("chat", {
+                    question: input,
+                }),
                 sender: "system",
             },
         ]);
+    }
+
+    async function uploadFile() {
+        await invokeErr("pick_file", {});
     }
 
     return (
@@ -134,7 +157,7 @@ function App() {
                     setTheme={setTheme}
                 />
                 <ChatHistory messages={messages} />
-                <UserInput inputHandler={greet} />
+                <UserInput inputHandler={greet} uploadHandler={uploadFile} />
             </div>
         </div>
     );
