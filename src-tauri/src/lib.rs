@@ -1,14 +1,14 @@
 use std::sync::LazyLock;
 
 use tauri_plugin_dialog::{DialogExt, FilePath};
-use tokio::{fs::File, sync::RwLock};
+use tauri_plugin_http::reqwest;
+use tokio::sync::RwLock;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
-use tauri_plugin_http::reqwest::{self, Body};
-use tokio_util::codec::{BytesCodec, FramedRead};
 
+#[derive(Debug)]
 pub enum ServeMode {
     LOCAL,
     REMOTE {
@@ -57,9 +57,24 @@ struct TalkRequest {
     session: usize,
 }
 
+// TODO: display retreived pictures in the front end.
+#[derive(Deserialize)]
+struct RelatingAssets {
+    asset_dir: String,
+}
+
+impl RelatingAssets {
+    // TODO: save to a local storage system, giving display layer the address.
+    pub fn save(&self) {
+        todo!()
+    }
+}
+
+// TODO: add source in returned responses.
 #[derive(Deserialize)]
 struct QueryResponse {
     response: String,
+    relating_assets: Vec<RelatingAssets>,
 }
 
 async fn chat_remote(question: &str, client: &reqwest::Client, session: usize) -> Result<String> {
@@ -101,16 +116,12 @@ async fn pick_file(
 ) -> Result<(), ()> {
     let file_path = pick_file_async(app_handle).await.ok_or(())?;
     match &*state.read().await {
-        ServeMode::LOCAL => upload_local(),
+        ServeMode::LOCAL => upload_local().await,
         ServeMode::REMOTE { http_client, .. } => {
             upload_file(file_path, &http_client).await.unwrap()
         }
     };
     Ok(())
-}
-
-fn upload_local() {
-    println!("upload later");
 }
 
 async fn pick_file_async(app_handle: tauri::AppHandle) -> Option<FilePath> {
@@ -120,22 +131,33 @@ async fn pick_file_async(app_handle: tauri::AppHandle) -> Option<FilePath> {
         .unwrap_or_default()
 }
 
-fn file_to_body(file: File) -> Body {
-    let stream = FramedRead::new(file, BytesCodec::new());
-    let body = Body::wrap_stream(stream);
-    body
+async fn upload_local() {
+    println!("upload later");
 }
 
 async fn upload_file(file_path: FilePath, client: &reqwest::Client) -> Result<()> {
     static ENDPOINT: LazyLock<String> = build_endpoint!(UPLOAD_ENDPOINT);
-    let file = File::open(file_path.into_path().unwrap()).await?;
-    let res = client
-        .post(&*ENDPOINT)
-        .body(file_to_body(file))
-        .send()
+    let form = reqwest::multipart::Form::new()
+        .file("file", file_path.into_path().unwrap())
         .await?;
+    let res = client.post(&*ENDPOINT).multipart(form).send().await?;
     println!("{:?}", res);
     Ok(())
+}
+
+#[tauri::command]
+fn set_serve_mode() {
+    todo!("")
+}
+
+#[tauri::command]
+fn refresh_session() {
+    todo!("")
+}
+
+#[tauri::command]
+fn clear_history() {
+    todo!("")
 }
 
 fn build_remote_app() -> Result<ServeMode> {
@@ -156,6 +178,7 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             )
         })
         .unwrap_or(ServeMode::LOCAL);
+    println!("serve mode is {:?}", serve_mode);
     app.manage(RwLock::new(serve_mode));
     Ok(())
 }
@@ -167,7 +190,13 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
         .setup(build_app)
-        .invoke_handler(tauri::generate_handler![chat, pick_file])
+        .invoke_handler(tauri::generate_handler![
+            chat,
+            pick_file,
+            set_serve_mode,
+            refresh_session,
+            clear_history
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

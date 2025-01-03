@@ -126,7 +126,7 @@ async function invokeErr<T>(cmd: string, args?: any) {
     }
 }
 
-function App() {
+function Chat() {
     const [messages, setMessages] = useState<Message[]>([]);
 
     const [theme, setTheme] = useState("dark");
@@ -148,9 +148,10 @@ function App() {
         await invokeErr("pick_file", {});
     }
 
+    /// TODO: move theme to outside.
     return (
-        <div className={theme === "dark" ? "dark" : ""}>
-            <div className="flex flex-col h-screen bg-gray-100">
+        <div className={(theme === "dark" ? "dark" : "") + " w-full"}>
+            <div className="flex flex-col h-screen bg-gray-100 w-full">
                 <TopBar
                     onClear={() => setMessages([])}
                     theme={theme}
@@ -163,4 +164,4 @@ function App() {
     );
 }
 
-export default App;
+export default Chat;
