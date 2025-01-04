@@ -6,21 +6,15 @@ import LightSVG from "./light.svg";
 import Logo from "../src-tauri/icons/icon.png";
 import UserAvatar from "./user.png";
 import { ScrollArea } from "./scroll-area";
+import { useTheme } from "./components/theme-provider";
 
 type Message = {
     text: string;
     sender: "user" | "system";
 };
 
-function TopBar({
-    onClear,
-    theme,
-    setTheme,
-}: {
-    onClear: () => void;
-    theme: string;
-    setTheme: (theme: string) => void;
-}) {
+function TopBar({ onClear }: { onClear: () => void }) {
+    const { theme, setTheme } = useTheme();
     return (
         <div className="flex items-center justify-center p-4 bg-white shadow-md dark:border-white dark:bg-stone-900">
             <button
@@ -129,8 +123,6 @@ async function invokeErr<T>(cmd: string, args?: any) {
 function Chat() {
     const [messages, setMessages] = useState<Message[]>([]);
 
-    const [theme, setTheme] = useState("dark");
-
     async function greet(input: string) {
         setMessages([
             ...messages,
@@ -148,18 +140,11 @@ function Chat() {
         await invokeErr("pick_file", {});
     }
 
-    /// TODO: move theme to outside.
     return (
-        <div className={(theme === "dark" ? "dark" : "") + " w-full"}>
-            <div className="flex flex-col h-screen bg-gray-100 w-full">
-                <TopBar
-                    onClear={() => setMessages([])}
-                    theme={theme}
-                    setTheme={setTheme}
-                />
-                <ChatHistory messages={messages} />
-                <UserInput inputHandler={greet} uploadHandler={uploadFile} />
-            </div>
+        <div className="flex flex-col h-screen bg-gray-100 w-full">
+            <TopBar onClear={() => setMessages([])} />
+            <ChatHistory messages={messages} />
+            <UserInput inputHandler={greet} uploadHandler={uploadFile} />
         </div>
     );
 }
