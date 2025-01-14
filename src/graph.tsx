@@ -1,16 +1,17 @@
 import { useEffect, useRef } from "react";
 import * as echarts from "echarts";
-import * as graph_data_example from "@/data/example.json";
+import graph_data_example from "@/data/example.ts";
+import { MemoryNode } from "./data/node";
 
 const ChartOne = () => {
     const chartRef = useRef<HTMLDivElement>(null);
     const exampleData = graph_data_example;
 
     useEffect(() => {
-        // Initialize the chart only once
         let chartInstance: echarts.EChartsType | null = null;
 
         if (chartRef.current) {
+            // Initialize the chart
             chartInstance = echarts.init(chartRef.current);
 
             const option: echarts.EChartsOption = {
@@ -29,22 +30,25 @@ const ChartOne = () => {
                         name: "Memory",
                         type: "graph",
                         legendHoverLink: false,
-                        layout: "none",
-                        data: exampleData.nodes.map((node) => ({
+                        layout: "force",
+                        data: exampleData.nodes.map((node: MemoryNode) => ({
                             id: node.id,
-                            name: node.summary ?? node.gist,
-                            symbolSize: 26.6666666666666665,
-                            x: node.x,
-                            y: node.y,
+                            name:
+                                node.kind === "leaf" ? node.gist : node.summary,
+                            symbolSize: node.kind == "leaf" ? 10 : 20,
                             value: 30,
-                            category: 1,
+                            category: node.kind == "leaf" ? 1 : 2,
                         })),
                         links: exampleData.link.map((link) => ({
                             source: link.from,
                             target: link.to,
                         })),
                         roam: true,
+                        force: {
+                            repulsion: 100,
+                        },
                         label: {
+                            show: true,
                             position: "right",
                             formatter: "{b}",
                         },
@@ -63,12 +67,20 @@ const ChartOne = () => {
             };
 
             chartInstance.setOption(option);
-        }
 
-        // Cleanup function to dispose of the chart instance
-        return () => {
-            chartInstance?.dispose();
-        };
+            // Add a resize event listener
+            const handleResize = () => {
+                chartInstance?.resize();
+            };
+
+            window.addEventListener("resize", handleResize);
+
+            // Cleanup function
+            return () => {
+                chartInstance?.dispose();
+                window.removeEventListener("resize", handleResize);
+            };
+        }
     }, [exampleData]);
 
     return <div ref={chartRef} className="flex w-full min-h-screen"></div>;

@@ -8,6 +8,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
+mod api;
+
 #[derive(Debug)]
 pub enum ServeMode {
     LOCAL,
