@@ -1,7 +1,11 @@
 use std::sync::LazyLock;
 
+use bert::build_model_and_tokenizer;
+use candle_transformers::models::bert::BertModel;
+use local::chat_local;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_http::reqwest;
+use tokenizers::Tokenizer;
 use tokio::sync::RwLock;
 
 use anyhow::Result;
@@ -9,10 +13,14 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 mod api;
+mod bert;
+mod local;
 
-#[derive(Debug)]
 pub enum ServeMode {
-    LOCAL,
+    LOCAL {
+        tokenizer: Tokenizer,
+        bert: BertModel,
+    },
     REMOTE {
         http_client: reqwest::Client,
         session: usize,
@@ -21,18 +29,14 @@ pub enum ServeMode {
 
 #[tauri::command]
 async fn chat(question: &str, state: tauri::State<'_, RwLock<ServeMode>>) -> Result<String, ()> {
-    let res = match &*state.read().await {
-        ServeMode::LOCAL => chat_local(question),
+    let res = match &mut *state.write().await {
+        ServeMode::LOCAL { tokenizer, bert } => chat_local(question, tokenizer, bert),
         ServeMode::REMOTE {
             http_client,
             session,
         } => chat_remote(question, &http_client, *session).await,
     };
     Ok(res.unwrap_or_else(|err| format!("An error occurred during our conversation:\n{}", err)))
-}
-
-fn chat_local(question: &str) -> Result<String> {
-    Ok(format!("you said {}!", question))
 }
 
 const REMOTE_ADDR: &str = "http://localhost:8762";
@@ -118,7 +122,7 @@ async fn pick_file(
 ) -> Result<(), ()> {
     let file_path = pick_file_async(app_handle).await.ok_or(())?;
     match &*state.read().await {
-        ServeMode::LOCAL => upload_local().await,
+        ServeMode::LOCAL { .. } => upload_local().await,
         ServeMode::REMOTE { http_client, .. } => {
             upload_file(file_path, &http_client).await.unwrap()
         }
@@ -179,8 +183,17 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 err
             )
         })
-        .unwrap_or(ServeMode::LOCAL);
-    println!("serve mode is {:?}", serve_mode);
+        .unwrap_or({
+            let (bert, tokenizer) = build_model_and_tokenizer(None, None).unwrap();
+            ServeMode::LOCAL { tokenizer, bert }
+        });
+    println!(
+        "serve mode is {:?}",
+        match serve_mode {
+            ServeMode::LOCAL { .. } => "local",
+            ServeMode::REMOTE { .. } => "remote",
+        }
+    );
     app.manage(RwLock::new(serve_mode));
     Ok(())
 }

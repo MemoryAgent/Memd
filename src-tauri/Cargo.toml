@@ -31,3 +31,11 @@ anyhow = "1.0.94"
 tokio = { version = "1.42.0", features = ["full"] }
 tauri-plugin-dialog = "2"
 tokio-util = "0.7.13"
+
+# AI
+candle-transformers = "0.8.2"
+tokenizers = "0.21.0"
+safetensors = "0.5.2"
+candle-core = "0.8.2"
+candle-nn = "0.8.2"
+hf-hub = "0.4.1"
