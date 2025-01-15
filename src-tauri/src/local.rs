@@ -1,14 +1,19 @@
 use anyhow::Result;
-use candle_transformers::models::bert::BertModel;
-use tokenizers::Tokenizer;
 
-use crate::bert::encode_prompt;
+use crate::{bert::encode_prompt, ServeMode};
 
-pub fn chat_local(
-    question: &str,
-    tokenizer: &mut Tokenizer,
-    bert_model: &BertModel,
-) -> Result<String> {
-    let encoded = encode_prompt(question, tokenizer, bert_model)?;
-    Ok(format!("you said {}", encoded))
+pub fn chat_local(question: &str, local_state: &mut ServeMode) -> Result<String> {
+    match local_state {
+        ServeMode::LOCAL {
+            tokenizer,
+            bert,
+            db,
+        } => {
+            let encoded = encode_prompt(question, tokenizer, bert)?;
+            let mem = db.query(&encoded)?;
+            db.add(&encoded, question);
+            Ok(format!("you said {}", mem.text))
+        }
+        _ => todo!("this is unreachable..."),
+    }
 }

@@ -2,6 +2,7 @@ use std::sync::LazyLock;
 
 use bert::build_model_and_tokenizer;
 use candle_transformers::models::bert::BertModel;
+use db::{InMemDB, VecStore};
 use local::chat_local;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_http::reqwest;
@@ -14,12 +15,15 @@ use tauri::Manager;
 
 mod api;
 mod bert;
+mod db;
+mod llm;
 mod local;
 
 pub enum ServeMode {
     LOCAL {
         tokenizer: Tokenizer,
         bert: BertModel,
+        db: Box<dyn VecStore + Sync + Send>,
     },
     REMOTE {
         http_client: reqwest::Client,
@@ -30,7 +34,7 @@ pub enum ServeMode {
 #[tauri::command]
 async fn chat(question: &str, state: tauri::State<'_, RwLock<ServeMode>>) -> Result<String, ()> {
     let res = match &mut *state.write().await {
-        ServeMode::LOCAL { tokenizer, bert } => chat_local(question, tokenizer, bert),
+        local_state @ ServeMode::LOCAL { .. } => chat_local(question, local_state),
         ServeMode::REMOTE {
             http_client,
             session,
@@ -185,7 +189,12 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap_or({
             let (bert, tokenizer) = build_model_and_tokenizer(None, None).unwrap();
-            ServeMode::LOCAL { tokenizer, bert }
+            let db = Box::new(InMemDB::new());
+            ServeMode::LOCAL {
+                tokenizer,
+                bert,
+                db,
+            }
         });
     println!(
         "serve mode is {:?}",
