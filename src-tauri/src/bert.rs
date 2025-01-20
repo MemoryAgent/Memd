@@ -57,11 +57,11 @@ pub fn encode_prompt(s: &str, tokenizer: &mut Tokenizer, model: &BertModel) -> R
         .map_err(E::msg)
 }
 
-fn encode_sentence(
-    sentences: Vec<String>,
+pub fn encode_sentence(
+    sentences: &Vec<String>,
     tokenizer: &mut Tokenizer,
     model: &BertModel,
-) -> Result<Tensor> {
+) -> Result<Vec<Tensor>> {
     let device = &model.device;
 
     if let Some(pp) = tokenizer.get_padding_mut() {
@@ -98,5 +98,7 @@ fn encode_sentence(
 
     model
         .forward(&token_ids, &token_type_ids, Some(&attention_mask))
+        .map_err(E::msg)?
+        .chunk(1, 0)
         .map_err(E::msg)
 }

@@ -39,3 +39,8 @@ safetensors = "0.5.2"
 candle-core = "0.8.2"
 candle-nn = "0.8.2"
 hf-hub = "0.4.1"
+
+# Web
+axum = { version = "0.8.1", features = ["macros"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"

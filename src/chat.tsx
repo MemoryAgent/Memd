@@ -13,7 +13,13 @@ type Message = {
     sender: "user" | "system";
 };
 
-function TopBar({ onClear }: { onClear: () => void }) {
+function TopBar({
+    onClear,
+    onBench,
+}: {
+    onClear: () => void;
+    onBench: () => void;
+}) {
     const { theme, setTheme } = useTheme();
     return (
         <div className="flex items-center justify-center p-4 bg-white shadow-md dark:border-white dark:bg-stone-900">
@@ -36,6 +42,12 @@ function TopBar({ onClear }: { onClear: () => void }) {
                 onClick={onClear}
             >
                 Clear
+            </button>
+            <button
+                className="px-4 py-2  text-black dark:text-white bg-white dark:bg-stone-900 rounded-lg hover:bg-gray-200 focus:ring focus:ring-slate-100"
+                onClick={onBench}
+            >
+                Bench
             </button>
         </div>
     );
@@ -136,13 +148,17 @@ function Chat() {
         ]);
     }
 
+    async function open_bench() {
+        await invokeErr("open_bench", {});
+    }
+
     async function uploadFile() {
         await invokeErr("pick_file", {});
     }
 
     return (
         <div className="flex flex-col h-screen bg-gray-100 w-full">
-            <TopBar onClear={() => setMessages([])} />
+            <TopBar onClear={() => setMessages([])} onBench={open_bench} />
             <ChatHistory messages={messages} />
             <UserInput inputHandler={greet} uploadHandler={uploadFile} />
         </div>

@@ -1,17 +1,14 @@
-use std::sync::LazyLock;
+use std::{fmt::Debug, sync::LazyLock};
 
-use bert::build_model_and_tokenizer;
-use candle_transformers::models::bert::BertModel;
-use db::{InMemDB, VecStore};
-use local::chat_local;
+use local::{chat_local, open_for_benchmark, LocalState};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_http::reqwest;
-use tokenizers::Tokenizer;
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, task::JoinHandle};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
+use tracing::info;
 
 mod api;
 mod bert;
@@ -20,21 +17,33 @@ mod llm;
 mod local;
 
 pub enum ServeMode {
-    LOCAL {
-        tokenizer: Tokenizer,
-        bert: BertModel,
-        db: Box<dyn VecStore + Sync + Send>,
-    },
+    LOCAL(LocalState),
     REMOTE {
         http_client: reqwest::Client,
         session: usize,
     },
 }
 
+impl Debug for ServeMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LOCAL(_) => f.debug_tuple("LOCAL").finish(),
+            Self::REMOTE {
+                http_client,
+                session,
+            } => f
+                .debug_struct("REMOTE")
+                .field("http_client", http_client)
+                .field("session", session)
+                .finish(),
+        }
+    }
+}
+
 #[tauri::command]
 async fn chat(question: &str, state: tauri::State<'_, RwLock<ServeMode>>) -> Result<String, ()> {
     let res = match &mut *state.write().await {
-        local_state @ ServeMode::LOCAL { .. } => chat_local(question, local_state),
+        ServeMode::LOCAL(local_state) => chat_local(question, local_state),
         ServeMode::REMOTE {
             http_client,
             session,
@@ -170,6 +179,23 @@ fn clear_history() {
     todo!("")
 }
 
+struct BenchmarkState {
+    state: Option<JoinHandle<()>>,
+}
+
+#[tauri::command]
+async fn open_bench(
+    serve: tauri::State<'_, RwLock<ServeMode>>,
+    bench: tauri::State<'_, RwLock<BenchmarkState>>,
+) -> Result<(), ()> {
+    if let ServeMode::LOCAL(l) = &*serve.write().await {
+        let handle = open_for_benchmark(l.handle()).unwrap();
+        let mut bench = bench.write().await;
+        bench.state = Some(handle);
+    }
+    Ok(())
+}
+
 fn build_remote_app() -> Result<ServeMode> {
     let http_client = create_http_client()?;
     let session = open_session()?;
@@ -182,28 +208,15 @@ fn build_remote_app() -> Result<ServeMode> {
 fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let serve_mode = build_remote_app()
         .map_err(|err| {
-            println!(
+            info!(
                 "connect to online host failed, fallback to local:\n {}",
                 err
             )
         })
-        .unwrap_or({
-            let (bert, tokenizer) = build_model_and_tokenizer(None, None).unwrap();
-            let db = Box::new(InMemDB::new());
-            ServeMode::LOCAL {
-                tokenizer,
-                bert,
-                db,
-            }
-        });
-    println!(
-        "serve mode is {:?}",
-        match serve_mode {
-            ServeMode::LOCAL { .. } => "local",
-            ServeMode::REMOTE { .. } => "remote",
-        }
-    );
+        .unwrap_or(ServeMode::LOCAL(LocalState::default()));
+    info!("serve mode is {:?}", serve_mode);
     app.manage(RwLock::new(serve_mode));
+    app.manage(RwLock::new(BenchmarkState { state: None }));
     Ok(())
 }
 
@@ -219,7 +232,8 @@ pub fn run() {
             pick_file,
             set_serve_mode,
             refresh_session,
-            clear_history
+            clear_history,
+            open_bench
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
