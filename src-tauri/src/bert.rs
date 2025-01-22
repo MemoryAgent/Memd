@@ -39,6 +39,10 @@ pub fn build_model_and_tokenizer(
     Ok((model, tokenizer))
 }
 
+pub fn normalize_l2(v: &Tensor) -> Result<Tensor> {
+    Ok(v.broadcast_div(&v.sqr()?.sum_all()?.sqrt()?)?)
+}
+
 pub fn encode_prompt(s: &str, tokenizer: &mut Tokenizer, model: &BertModel) -> Result<Tensor> {
     let device = &model.device;
     let tokenizer = tokenizer
@@ -52,9 +56,12 @@ pub fn encode_prompt(s: &str, tokenizer: &mut Tokenizer, model: &BertModel) -> R
         .to_vec();
     let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
     let token_type_ids = token_ids.zeros_like()?;
-    model
+    let embedding = model
         .forward(&token_ids, &token_type_ids, None)
-        .map_err(E::msg)
+        .map_err(E::msg)?;
+    let pooled_embedding = embedding.sum((0, 1))? / (tokens.len() as f64);
+    let normalized_embedding = normalize_l2(&pooled_embedding?);
+    normalized_embedding.map_err(E::msg)
 }
 
 pub fn encode_sentence(
@@ -96,9 +103,15 @@ pub fn encode_sentence(
     let attention_mask = Tensor::stack(&attention_mask, 0)?;
     let token_type_ids = token_ids.zeros_like()?;
 
-    model
+    let embeddings = model
         .forward(&token_ids, &token_type_ids, Some(&attention_mask))
-        .map_err(E::msg)?
-        .chunk(1, 0)
-        .map_err(E::msg)
+        .map_err(E::msg)?;
+    let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
+    let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
+
+    let mut batch_embeddings = vec![];
+    for i in 0..sentences.len() {
+        batch_embeddings.push(embeddings.get(i)?);
+    }
+    Ok(batch_embeddings)
 }

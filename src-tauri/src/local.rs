@@ -1,8 +1,11 @@
 use anyhow::Result;
 use axum::{extract::State, routing::post, Json, Router};
 use candle_transformers::models::bert::BertModel;
-use serde::Deserialize;
-use std::sync::{Arc, RwLock};
+use serde::{Deserialize, Serialize};
+use std::{
+    sync::{Arc, RwLock},
+    time::{Duration, SystemTime},
+};
 use tokenizers::Tokenizer;
 use tokio::task::JoinHandle;
 use tracing::info;
@@ -53,11 +56,18 @@ impl LocalState {
 struct StorePayload(Vec<String>);
 
 fn add_comps(text: Vec<String>, local_comps: &mut LocalComponent) -> Result<()> {
-    let encoded = encode_sentence(&text, &mut local_comps.tokenizer, &local_comps.bert)?;
-    encoded
+    // let encoded = encode_sentence(&text, &mut local_comps.tokenizer, &local_comps.bert)?;
+    // encoded.iter().zip(&text).for_each(|(t, txt)| {
+    //     local_comps.db.add(t, &txt);
+    // });
+    let encoded: Vec<Result<()>> = text
         .iter()
-        .zip(text.iter())
-        .for_each(|(embedding, text)| local_comps.db.add(embedding, text));
+        .map(|s| {
+            let encoded = encode_prompt(s, &mut local_comps.tokenizer, &local_comps.bert)?;
+            local_comps.db.add(&encoded, &s);
+            Ok(())
+        })
+        .collect();
     Ok(())
 }
 
@@ -78,41 +88,136 @@ pub fn chat_local(question: &str, local_state: &LocalState) -> Result<String> {
     chat_comps(question, &mut local_comps)
 }
 
+/// [`Timer`] is used to record the processing time of this program.
+#[derive(Default)]
+struct Timer {
+    total: Duration,
+    session_started: Option<SystemTime>,
+}
+
+impl Timer {
+    fn reset(&mut self) {
+        self.total = Duration::from_secs(0);
+        self.session_started = None;
+    }
+
+    fn start(&mut self) {
+        self.session_started = Some(match self.session_started {
+            Some(_) => panic!("started timer when it is started."),
+            None => SystemTime::now(),
+        });
+    }
+
+    fn pause(&mut self) {
+        self.total += SystemTime::elapsed(&self.session_started.unwrap()).unwrap();
+        self.session_started = None
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MetricData {
+    embedding_cost: Duration,
+    query_cost: Duration,
+}
+
+#[derive(Default)]
+struct Metrics {
+    embedding_timer: Timer,
+    query_timer: Timer,
+}
+
+impl Metrics {
+    fn reset(&mut self) {
+        self.embedding_timer.reset();
+        self.query_timer.reset();
+    }
+
+    fn start_embedding(&mut self) {
+        self.embedding_timer.start();
+    }
+
+    fn end_embedding(&mut self) {
+        self.embedding_timer.pause();
+    }
+
+    fn start_query(&mut self) {
+        self.query_timer.start();
+    }
+
+    fn end_query(&mut self) {
+        self.query_timer.pause();
+    }
+
+    fn report(&self) -> MetricData {
+        MetricData {
+            embedding_cost: self.embedding_timer.total,
+            query_cost: self.query_timer.total,
+        }
+    }
+}
+
+struct BenchServerState {
+    local_comps: Arc<RwLock<LocalComponent>>,
+    metrics: Metrics,
+}
+
+impl BenchServerState {
+    fn new(local_comps: Arc<RwLock<LocalComponent>>) -> Self {
+        Self {
+            local_comps,
+            metrics: Metrics::default(),
+        }
+    }
+}
+
 #[allow(unused)]
-async fn bench_open() -> &'static str {
+async fn bench_open(State(bs_state): State<Arc<RwLock<BenchServerState>>>) -> &'static str {
+    let mut bs_state = bs_state.write().unwrap();
+    bs_state.metrics.reset();
     "happy for challenge."
 }
 
 #[allow(unused)]
 async fn bench_store(
-    State(local_component): State<Arc<RwLock<LocalComponent>>>,
+    State(bs_state): State<Arc<RwLock<BenchServerState>>>,
     text: Json<StorePayload>,
 ) -> &'static str {
-    add_comps(text.0 .0, &mut local_component.write().unwrap()).unwrap();
+    let mut bs_state = bs_state.write().unwrap();
+    bs_state.metrics.start_embedding();
+    add_comps(text.0 .0, &mut bs_state.local_comps.write().unwrap()).unwrap();
+    bs_state.metrics.end_embedding();
     "added"
 }
 
 #[allow(unused)]
 async fn bench_query(
-    State(local_component): State<Arc<RwLock<LocalComponent>>>,
+    State(bs_state): State<Arc<RwLock<BenchServerState>>>,
     query: String,
 ) -> String {
-    query_comps(&query, &mut local_component.write().unwrap()).unwrap_or("not found".to_string())
+    let mut bs_state = bs_state.write().unwrap();
+    bs_state.metrics.start_query();
+    let answer = query_comps(&query, &mut bs_state.local_comps.write().unwrap())
+        .unwrap_or("not found".to_string());
+    bs_state.metrics.end_query();
+    answer
 }
 
-async fn bench_close() -> &'static str {
-    "Ceterum censeo Carthaginem esse delendam"
+async fn bench_close(State(bs_state): State<Arc<RwLock<BenchServerState>>>) -> Json<MetricData> {
+    let bs_state = bs_state.read().unwrap();
+    Json(bs_state.metrics.report())
 }
 
 pub fn open_for_benchmark(local_state: Arc<RwLock<LocalComponent>>) -> Result<JoinHandle<()>> {
-    info!("opening server for testing");
+    info!("opening server for benchmark");
+
+    let b_state = Arc::new(RwLock::new(BenchServerState::new(local_state)));
 
     let app = Router::new()
         .route("/open", post(bench_open))
         .route("/store", post(bench_store))
         .route("/query", post(bench_query))
         .route("/close", post(bench_close))
-        .with_state(local_state);
+        .with_state(b_state);
 
     let handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind("localhost:3000")

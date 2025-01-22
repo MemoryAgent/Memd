@@ -1,5 +1,6 @@
 use anyhow::{Ok, Result};
 use candle_core::Tensor;
+use tracing::info;
 
 #[derive(Clone)]
 pub struct Memory {
@@ -23,6 +24,7 @@ impl InMemDB {
 
 impl VecStore for InMemDB {
     fn add(&mut self, tensor: &Tensor, text: &str) {
+        info!("adding {:?} {:?}, db size is {:?}", tensor.shape(), text, self.0.len());
         self.0.push(Memory {
             text: text.to_string(),
             embedding: tensor.clone(),
