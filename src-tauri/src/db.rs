@@ -24,7 +24,12 @@ impl InMemDB {
 
 impl VecStore for InMemDB {
     fn add(&mut self, tensor: &Tensor, text: &str) {
-        info!("adding {:?} {:?}, db size is {:?}", tensor.shape(), text, self.0.len());
+        info!(
+            "adding {:?} {:?}, db size is {:?}",
+            tensor.shape(),
+            text,
+            self.0.len()
+        );
         self.0.push(Memory {
             text: text.to_string(),
             embedding: tensor.clone(),
@@ -37,15 +42,19 @@ impl VecStore for InMemDB {
             .iter()
             .zip(0_usize..)
             .flat_map(|(mem, idx)| {
-                Ok((
-                    idx,
-                    (&mem.embedding * prompt)?.sum_all()?.to_scalar::<f32>()?,
-                ))
+                let similarity = (&mem.embedding * prompt)?.sum_all()?.to_scalar::<f32>()?;
+                let sum_i2 = (&mem.embedding * &mem.embedding)?
+                    .sum_all()?
+                    .to_scalar::<f32>()?;
+                let sum_j2 = (prompt * prompt)?.sum_all()?.to_scalar::<f32>()?;
+                Ok((idx, similarity / ((sum_i2 * sum_j2).sqrt() + 1e-6)))
             })
             .collect::<Vec<(usize, f32)>>();
-        similarities.sort_by(|u, v| u.1.total_cmp(&v.1));
-        if let Some((idx, _)) = similarities.get(0) {
-            Ok(self.0.get(*idx).unwrap().clone())
+        similarities.sort_by(|u, v| u.1.total_cmp(&v.1).reverse());
+        if let Some((idx, confidence)) = similarities.get(0) {
+            let answer = self.0.get(*idx).unwrap();
+            info!("retriving {} with confidence {}", answer.text, confidence);
+            Ok(answer.clone())
         } else {
             Ok(Memory {
                 text: "No memory yet".to_string(),

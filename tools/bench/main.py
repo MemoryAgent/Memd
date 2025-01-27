@@ -71,7 +71,7 @@ class RemoteModel(BaseModel):
 
 def rm_open(rm: RemoteModel) -> bool:
     resp = requests.post(f"{rm.url}/open")
-    if resp.content == b"happy for challenge.":
+    if resp.content.decode("utf-8") == "happy for challenge.":
         rm.state = RemoteState.OPEN
         return True
     return False
@@ -80,14 +80,14 @@ def rm_store(rm: RemoteModel, corpus: dict[int, dict[str, str]]) -> bool:
     assert rm.state == RemoteState.OPEN
     texts = [x['text'] for x in corpus.values()]
     resp = requests.post(f"{rm.url}/store", json=texts)
-    if resp.content == b"added":
+    if resp.content.decode("utf-8") == "added":
         return True
     return False
 
 def rm_query(rm: RemoteModel, query: str) -> str:
     assert rm.state == RemoteState.OPEN
     resp = requests.post(f"{rm.url}/query", query)
-    return resp.content
+    return resp.content.decode("utf-8")
 
 def rm_close(rm: RemoteModel) -> PerformanceMetric:
     assert rm.state == RemoteState.OPEN
@@ -109,12 +109,15 @@ def evaluate_queries(rm:  RemoteModel, corpus: dict, queries: dict, qrel: dict):
     # Fix rust embedding col issue [batch_index, token, dim]
     for (qid, query) in queries.items():
         answer = rm_query(rm, query)
-        results[f"{qid}"] = {
-           f"{inverted_corpus.get(answer, -1)}": 100.0 # TODO: return confidence
-        }
+        aid = inverted_corpus.get(answer, -1)
+        logging.info(f"getting query {qid} answer digest {answer[:100]} in document {aid}")
+        results[f"{qid}"] = { f"{aid}": 100.0 } # TODO: return confidence
     performance = rm_close(rm)
     return EvaluateRetrieval.evaluate(qrels=qrel, results=results, k_values=[1]), performance
 
+# Slow? 2k text x 5 ~ 20s
+# speed algorithm or model deployment
+#
 if __name__ == "__main__":
     bench = RemoteModel(url=REMOTE_URL)
     sol = evaluate_queries(bench, corpus, queries, qrels)

@@ -56,18 +56,10 @@ impl LocalState {
 struct StorePayload(Vec<String>);
 
 fn add_comps(text: Vec<String>, local_comps: &mut LocalComponent) -> Result<()> {
-    // let encoded = encode_sentence(&text, &mut local_comps.tokenizer, &local_comps.bert)?;
-    // encoded.iter().zip(&text).for_each(|(t, txt)| {
-    //     local_comps.db.add(t, &txt);
-    // });
-    let encoded: Vec<Result<()>> = text
-        .iter()
-        .map(|s| {
-            let encoded = encode_prompt(s, &mut local_comps.tokenizer, &local_comps.bert)?;
-            local_comps.db.add(&encoded, &s);
-            Ok(())
-        })
-        .collect();
+    let encoded = encode_sentence(&text, &mut local_comps.tokenizer, &local_comps.bert)?;
+    encoded.iter().zip(&text).for_each(|(t, txt)| {
+        local_comps.db.add(t, &txt);
+    });
     Ok(())
 }
 
