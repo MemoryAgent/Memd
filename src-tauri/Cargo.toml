@@ -44,3 +44,6 @@ hf-hub = "0.4.1"
 axum = { version = "0.8.1", features = ["macros"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
+
+# Local LLM
+llama-cpp-2 = "0.1.91"
