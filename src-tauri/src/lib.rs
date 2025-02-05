@@ -15,6 +15,7 @@ mod bert;
 mod db;
 mod llm;
 mod local;
+mod relation;
 
 pub enum ServeMode {
     LOCAL(LocalState),

@@ -15,6 +15,8 @@ use std::time::Duration;
 use std::vec;
 use tracing::info;
 
+use crate::relation::Relation;
+
 const DEEPSEEK_R1_1B: &str =
     "lmstudio-community/DeepSeek-R1-Distill-Qwen-1.5B-GGUF~DeepSeek-R1-Distill-Qwen-1.5B-Q8_0.gguf";
 
@@ -144,6 +146,100 @@ fn llama_test() {
     println!("{}", batch_decode(&model, &mut ctx, &token_list).unwrap());
 }
 
+//===-----------------------------------------------------------------------===
+// code for embedding
+//===-----------------------------------------------------------------------===
+
+fn create_embedding_ctx<'a>(
+    backend: &'a LlamaBackend,
+    model: &'a LlamaModel,
+) -> Result<LlamaContext<'a>> {
+    let ctx_params = LlamaContextParams::default()
+        .with_n_threads_batch(std::thread::available_parallelism()?.get().try_into()?)
+        .with_embeddings(true);
+    model
+        .new_context(backend, ctx_params)
+        .with_context(|| "create embedding ctx failed.")
+}
+
+
+fn batch_embedding(
+    ctx: &mut LlamaContext,
+    batch: &mut LlamaBatch,
+    s_batch: i32,
+    output: &mut Vec<Vec<f32>>,
+    normalise: bool,
+) -> Result<()> {
+    ctx.clear_kv_cache();
+    ctx.decode(batch).with_context(|| "llama_decode() failed")?;
+
+    for i in 0..s_batch {
+        let embedding = ctx
+            .embeddings_ith(i)
+            .with_context(|| "Failed to get embeddings")?;
+        let output_embeddings = if normalise {
+            normalize(embedding)
+        } else {
+            embedding.to_vec()
+        };
+
+        output.push(output_embeddings);
+    }
+
+    batch.clear();
+
+    Ok(())
+}
+
+fn normalize(input: &[f32]) -> Vec<f32> {
+    let magnitude = input
+        .iter()
+        .fold(0.0, |acc, &val| val.mul_add(val, acc))
+        .sqrt();
+
+    input.iter().map(|&val| val / magnitude).collect()
+}
+
+fn llm_embedding(
+    tokens_lines_list: &Vec<Vec<LlamaToken>>,
+    ctx: &mut LlamaContext,
+) -> Result<Vec<Vec<f32>>> {
+    let mut batch = LlamaBatch::new(512, 1);
+
+    let mut max_seq_id_batch = 0;
+    let mut output = Vec::with_capacity(tokens_lines_list.len());
+
+    let t_main_start = ggml_time_us();
+
+    for tokens in tokens_lines_list {
+        // Flush the batch if the next prompt would exceed our batch size
+        if (batch.n_tokens() as usize + tokens.len()) > 512 {
+            batch_embedding(ctx, &mut batch, max_seq_id_batch, &mut output, true)?;
+            max_seq_id_batch = 0;
+        }
+
+        batch.add_sequence(tokens, max_seq_id_batch, true)?;
+        max_seq_id_batch += 1;
+    }
+    // Handle final batch
+    batch_embedding(ctx, &mut batch, max_seq_id_batch, &mut output, true)?;
+
+    let t_main_end = ggml_time_us();
+
+    let duration = Duration::from_micros((t_main_end - t_main_start) as u64);
+    let total_tokens: usize = tokens_lines_list.iter().map(Vec::len).sum();
+    info!(
+        "Created embeddings for {} tokens in {:.2} s, speed {:.2} t/s\n",
+        total_tokens,
+        duration.as_secs_f32(),
+        total_tokens as f32 / duration.as_secs_f32()
+    );
+
+    println!("{}", ctx.timings());
+    Ok(output)
+}
+
+/// A facade for easier usage of LLM related functions.
 pub struct Llm {
     backend: LlamaBackend,
     model: LlamaModel,
@@ -170,6 +266,13 @@ impl Llm {
         let mut ctx = create_llm_ctx(&self.backend, &self.model)?;
         batch_decode(&self.model, &mut ctx, &tokens)
     }
+
+    pub fn embed(&self, text: &str) -> Result<Vec<Vec<f32>>> {
+        let tokens = tokenize(&self.model, text)?;
+        let batched_tokens = tokens.chunks(512).map(|x| x.to_vec()).collect();
+        let mut ctx = create_embedding_ctx(&self.backend, &self.model)?;
+        llm_embedding(&batched_tokens, &mut ctx)
+    }
 }
 
 impl Default for Llm {
@@ -189,6 +292,16 @@ fn test_two_questions() {
 
     let question_two = llm.complete("what is the solution of 1 + 1?").unwrap();
     println!("{question_two}");
+}
+
+#[test]
+fn test_embedding() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+    let llm = Llm::default();
+    let text = "hello there this is Harry";
+    println!("{:?}", llm.embed(text))
 }
 
 /// Deepseek R1's answers contains two parts
@@ -220,7 +333,11 @@ The answer is quite straight forward.
     assert_eq!(answer, "The answer is quite straight forward.\n");
 }
 
-fn build_re_prompt(q: &str) -> String {
+//===-----------------------------------------------------------------------===
+// code for relationships
+//===-----------------------------------------------------------------------===
+
+fn build_ee_prompt(q: &str) -> String {
     format!(
         "---
 Extract entities means to identify important nouns from a sentence, such as:
@@ -235,22 +352,71 @@ Please extract all entities in this question:
 }
 
 #[test]
-fn test_extract_relation() {
+fn test_extract_entity() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let prompt = "Which country does Tolstoy and Tchaikovsky live?";
     let llm = Llm::default();
-    println!("{:?}", extract_relation(prompt, &llm));
+    println!("{:?}", extract_entity(prompt, &llm));
 }
 
-fn extract_relation(q: &str, llm: &Llm) -> Result<Vec<String>> {
-    let re_prompt = build_re_prompt(q);
+fn extract_entity(q: &str, llm: &Llm) -> Result<Vec<String>> {
+    let re_prompt = build_ee_prompt(q);
     let answer = llm.complete(&re_prompt)?;
     info!("raw output {}", answer);
     let (thinking, answer) = extract_answer(&answer);
     info!("thinking procedure is {}. answer is {}", thinking, answer);
     Ok(answer.split(',').map(|x| x.to_string()).collect())
+}
+
+fn vec_to_csv(v: &Vec<String>) -> String {
+    v.iter().fold(String::new(), |mut acc, x| {
+        acc.push_str(x);
+        acc
+    })
+}
+
+fn build_re_prompt(passage: &str, entities: &Vec<String>) -> String {
+    format!(
+        "---
+Your task is to construct relationships from the given passages and entity lists.
+Respond with triples (entity, predicate, entity) representing relationships between entities.
+- Each triple should contain at least one, but preferably two, of the named entities in the list for each passage.
+- Clearly resolve pronouns to their specific names to maintain clarity.
+- the triple should be formatted as comma-separated lists. different triples are delimited by line break.
+---
+Example
+Passage: Tolstoy lived in Russia.
+Entities: Tolstoy,Russia
+
+You should reply:
+Tolstoy,live,Russia
+---
+Now please do the task
+Passage: {}
+Entities: {}", passage, vec_to_csv(&entities)
+    )
+}
+
+#[test]
+fn test_re_prompt() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+    let entities = vec!["Tolstoy".to_string(), "Russia".to_string()];
+    let llm = Llm::default();
+    let pe = get_re_entity("Tolstoy lived in Russia", &entities, &llm).unwrap();
+    println!("{}", pe);
+}
+
+fn get_re_entity(passage: &str, entities: &Vec<String>, llm: &Llm) -> Result<String> {
+    let prompt = build_re_prompt(passage, entities);
+    let answer = llm.complete(&prompt)?;
+    info!("raw output {}", answer);
+    let (thinking, answer) = extract_answer(&answer);
+    info!("thinking procedure is {}. answer is {}", thinking, answer);
+    Ok(answer.to_string())
 }
 
 fn build_parent_prompt(r: &str) -> String {
@@ -276,13 +442,6 @@ fn test_parent_prompt() {
     let llm = Llm::default();
     let pe = get_parent_entity(&entities, &llm).unwrap();
     println!("{}", pe);
-}
-
-fn vec_to_csv(v: &Vec<String>) -> String {
-    v.iter().fold(String::new(), |mut acc, x| {
-        acc.push_str(x);
-        acc
-    })
 }
 
 fn get_parent_entity(v: &Vec<String>, llm: &Llm) -> Result<String> {
