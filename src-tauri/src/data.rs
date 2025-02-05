@@ -1,4 +1,14 @@
 #[derive(Debug, Clone)]
+pub struct Document {
+
+}
+
+#[derive(Debug, Clone)]
+pub struct Entity {
+
+}
+
+#[derive(Debug, Clone)]
 pub struct Relation {
     subject: String,
     relation: String,
@@ -6,7 +16,7 @@ pub struct Relation {
 }
 
 impl Relation {
-    pub fn parse(s: String) -> Self {
+    pub fn parse(s: &str) -> Self {
         let xs: Vec<String> = s.split(',').map(|x| x.to_string()).collect();
         Relation {
             subject: xs[0].clone(),

@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::vec;
 use tracing::info;
 
-use crate::relation::Relation;
+use crate::data::Relation;
 
 const DEEPSEEK_R1_1B: &str =
     "lmstudio-community/DeepSeek-R1-Distill-Qwen-1.5B-GGUF~DeepSeek-R1-Distill-Qwen-1.5B-Q8_0.gguf";
@@ -88,7 +88,7 @@ fn batch_decode(
     let mut sampler = LlamaSampler::chain_simple([
         LlamaSampler::temp(0.6),
         LlamaSampler::top_p(0.95, 1),
-        LlamaSampler::dist(1234),
+        LlamaSampler::greedy(),
     ]);
 
     let mut answer = String::new();
@@ -161,7 +161,6 @@ fn create_embedding_ctx<'a>(
         .new_context(backend, ctx_params)
         .with_context(|| "create embedding ctx failed.")
 }
-
 
 fn batch_embedding(
     ctx: &mut LlamaContext,
@@ -407,16 +406,21 @@ fn test_re_prompt() {
     let entities = vec!["Tolstoy".to_string(), "Russia".to_string()];
     let llm = Llm::default();
     let pe = get_re_entity("Tolstoy lived in Russia", &entities, &llm).unwrap();
-    println!("{}", pe);
+    println!("{:?}", pe);
 }
 
-fn get_re_entity(passage: &str, entities: &Vec<String>, llm: &Llm) -> Result<String> {
+fn get_re_entity(passage: &str, entities: &Vec<String>, llm: &Llm) -> Result<Vec<Relation>> {
     let prompt = build_re_prompt(passage, entities);
     let answer = llm.complete(&prompt)?;
     info!("raw output {}", answer);
     let (thinking, answer) = extract_answer(&answer);
     info!("thinking procedure is {}. answer is {}", thinking, answer);
-    Ok(answer.to_string())
+    Ok(answer
+        .to_string()
+        .lines()
+        .map(|l| l.to_string())
+        .map(|x| Relation::parse(&x))
+        .collect())
 }
 
 fn build_parent_prompt(r: &str) -> String {
@@ -452,4 +456,61 @@ fn get_parent_entity(v: &Vec<String>, llm: &Llm) -> Result<String> {
     let (thinking, answer) = extract_answer(&answer);
     info!("thinking procedure is {}. answer is {}", thinking, answer);
     Ok(answer.to_string())
+}
+
+fn build_complete_prompt(
+    q: &str,
+    topic_entity: &str,
+    relations: &Vec<Relation>,
+    documents: &Vec<String>,
+) -> String {
+    format!(
+        "---
+For the topic entity: {topic_entity}
+We have found following relevant relationships: {relations:?}
+They are from these documents: {documents:?}
+Please answer the question {q}"
+    )
+}
+
+fn chat_complete_prompt(
+    q: &str,
+    topic_entity: &str,
+    relations: &Vec<Relation>,
+    documents: &Vec<String>,
+    llm: &Llm,
+) -> Result<String> {
+    let prompt = build_complete_prompt(q, topic_entity, relations, documents);
+    llm.complete(&prompt)
+}
+
+#[test]
+fn test_complete_prompt() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+    let llm = Llm::default();
+    let answer = chat_complete_prompt(
+        "Where did Tolstoy live",
+        "Tolstoy",
+        &vec![Relation::parse("Tolstoy,lived in,Russia")],
+        &vec!["Tolstoy lived in Russia in the late nineteenth century.".to_string()],
+        &llm,
+    )
+    .unwrap();
+    println!("{}", answer);
+}
+
+impl Llm {
+    pub fn extract_entities(&self, text: &str) -> Result<Vec<String>> {
+        extract_entity(text, self)
+    }
+
+    pub fn extract_relation(&self, text: &str, entities: &Vec<String>) -> Result<Vec<Relation>> {
+        get_re_entity(text, entities, self)
+    }
+
+    pub fn extract_parent(&self, v: &Vec<String>) -> Result<String> {
+        get_parent_entity(v, self)
+    }
 }
