@@ -13,11 +13,13 @@ use tracing::info;
 use crate::{
     bert::{build_model_and_tokenizer, encode_prompt, encode_sentence},
     db::{InMemDB, VecStore},
+    llm::Llm,
 };
 
 pub struct LocalComponent {
     tokenizer: Tokenizer,
     bert: BertModel,
+    llm: Llm,
     db: Box<dyn VecStore + Sync + Send>,
 }
 
@@ -26,9 +28,11 @@ impl Default for LocalComponent {
         let (bert, tokenizer) =
             build_model_and_tokenizer(None, None).expect("init embedding model failed.");
         let db = Box::new(InMemDB::new());
+        let llm = Llm::default();
         Self {
             tokenizer,
             bert,
+            llm,
             db,
         }
     }
@@ -72,7 +76,8 @@ fn query_comps(prompt: &str, local_comps: &mut LocalComponent) -> Result<String>
 fn chat_comps(question: &str, local_comps: &mut LocalComponent) -> Result<String> {
     let answer = query_comps(question, local_comps)?;
     add_comps(vec![question.to_string()], local_comps)?;
-    Ok(format!("you said {}", answer))
+    let llm_answer = local_comps.llm.complete(question)?;
+    Ok(format!("based on {}, answer is {}", answer, llm_answer))
 }
 
 pub fn chat_local(question: &str, local_state: &LocalState) -> Result<String> {
