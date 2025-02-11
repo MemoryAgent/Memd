@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tracing::info;
 
-mod api;
 mod bert;
 mod db;
 mod llm;

@@ -47,6 +47,5 @@ tracing-subscriber = "0.3.19"
 
 # Local LLM
 llama-cpp-2 = "0.1.91"
-
-# Vector Database
-duckdb = { version = "1.1.1", features = ["bundled"] }
+rusqlite = { version = "0.31.0", features = ["blob", "bundled"] }
+refinery = { version = "0.8.14", features = ["rusqlite"] }
