@@ -14,15 +14,15 @@ pub trait VecStore {
     fn query(&self, prompt: &Tensor) -> Result<Memory>;
 }
 
-pub struct InMemDB(Vec<Memory>);
+pub struct InMemCache(Vec<Memory>);
 
-impl InMemDB {
-    pub fn new() -> InMemDB {
-        InMemDB(vec![])
+impl InMemCache {
+    pub fn new() -> InMemCache {
+        InMemCache(vec![])
     }
 }
 
-impl VecStore for InMemDB {
+impl VecStore for InMemCache {
     fn add(&mut self, tensor: &Tensor, text: &str) {
         info!(
             "adding {:?} {:?}, db size is {:?}",

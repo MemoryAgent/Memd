@@ -12,7 +12,8 @@ use tracing::info;
 
 use crate::{
     bert::{build_model_and_tokenizer, encode_prompt, encode_sentence},
-    db::{InMemDB, VecStore},
+    cache::{InMemCache, VecStore},
+    data::{Chunk, Store},
     llm::Llm,
 };
 
@@ -20,20 +21,23 @@ pub struct LocalComponent {
     tokenizer: Tokenizer,
     bert: BertModel,
     llm: Llm,
-    db: Box<dyn VecStore + Sync + Send>,
+    cache: Box<dyn VecStore + Sync + Send>,
+    store: Store,
 }
 
 impl Default for LocalComponent {
     fn default() -> Self {
         let (bert, tokenizer) =
             build_model_and_tokenizer(None, None).expect("init embedding model failed.");
-        let db = Box::new(InMemDB::new());
+        let cache = Box::new(InMemCache::new());
         let llm = Llm::default();
+        let store = Store::default();
         Self {
             tokenizer,
             bert,
             llm,
-            db,
+            cache,
+            store,
         }
     }
 }
@@ -54,6 +58,10 @@ impl LocalState {
     pub fn handle(&self) -> Arc<RwLock<LocalComponent>> {
         self.comps.clone()
     }
+
+    fn chunking(&self, text: &str, chunk_tokens: usize) -> Vec<Chunk> {
+        todo!()
+    }
 }
 
 #[derive(Deserialize)]
@@ -62,14 +70,14 @@ struct StorePayload(Vec<String>);
 fn add_comps(text: Vec<String>, local_comps: &mut LocalComponent) -> Result<()> {
     let encoded = encode_sentence(&text, &mut local_comps.tokenizer, &local_comps.bert)?;
     encoded.iter().zip(&text).for_each(|(t, txt)| {
-        local_comps.db.add(t, &txt);
+        local_comps.cache.add(t, &txt);
     });
     Ok(())
 }
 
 fn query_comps(prompt: &str, local_comps: &mut LocalComponent) -> Result<String> {
     let encoded = encode_prompt(prompt, &mut local_comps.tokenizer, &local_comps.bert)?;
-    let memory = local_comps.db.query(&encoded)?;
+    let memory = local_comps.cache.query(&encoded)?;
     Ok(memory.text)
 }
 

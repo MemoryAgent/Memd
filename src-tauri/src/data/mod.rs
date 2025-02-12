@@ -1,6 +1,9 @@
 //! The data structure design roughly follows [MiniRAG](https://github.com/HKUDS/MiniRAG/blob/main/minirag/kg/postgres_impl.py).
 //!
 
+use std::sync::Mutex;
+
+use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 type DocumentId = i64;
@@ -15,7 +18,7 @@ type ChunkId = i64;
 pub struct Chunk {
     id: ChunkId,
     full_doc_id: DocumentId,
-    chuck_idx: i64,
+    chunk_index: i64,
     tokens: usize,
     content: String,
     content_vector: Vec<f32>,
@@ -53,5 +56,43 @@ impl Relation {
 mod sqlite;
 
 pub struct Store {
-    conn: Connection,
+    conn: Mutex<Connection>,
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self {
+            conn: Mutex::new(rusqlite::Connection::open_in_memory().unwrap()),
+        }
+    }
+}
+
+impl Store {
+    pub fn new(path: &str) -> Self {
+        Self {
+            conn: Mutex::new(rusqlite::Connection::open(path).unwrap()),
+        }
+    }
+
+    pub fn add_document(&self, doc_name: &str) -> Result<Document> {
+        sqlite::insert_document(&mut self.conn.lock().unwrap(), doc_name)
+    }
+
+    pub fn add_chunk(
+        &self,
+        full_doc_id: DocumentId,
+        chuck_index: i64,
+        tokens: usize,
+        content: &str,
+        content_vector: &Vec<f32>,
+    ) -> Result<Chunk> {
+        sqlite::insert_chunk(
+            &mut self.conn.lock().unwrap(),
+            full_doc_id,
+            chuck_index,
+            tokens,
+            content,
+            content_vector,
+        )
+    }
 }

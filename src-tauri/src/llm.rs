@@ -162,6 +162,7 @@ fn create_embedding_ctx<'a>(
         .with_context(|| "create embedding ctx failed.")
 }
 
+// TODO: this is wrong
 fn batch_embedding(
     ctx: &mut LlamaContext,
     batch: &mut LlamaBatch,
@@ -271,6 +272,10 @@ impl Llm {
         let batched_tokens = tokens.chunks(512).map(|x| x.to_vec()).collect();
         let mut ctx = create_embedding_ctx(&self.backend, &self.model)?;
         llm_embedding(&batched_tokens, &mut ctx)
+    }
+
+    pub fn tokenize(&self, text: &str) -> Result<Vec<LlamaToken>> {
+        tokenize(&self.model, text)
     }
 }
 

@@ -11,7 +11,7 @@ use tauri::Manager;
 use tracing::info;
 
 mod bert;
-mod db;
+mod cache;
 mod llm;
 mod local;
 mod data;
