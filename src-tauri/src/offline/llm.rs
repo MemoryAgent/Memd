@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::vec;
 use tracing::info;
 
-use crate::data::Relation;
+use crate::offline::data::Relation;
 
 const DEEPSEEK_R1_1B: &str =
     "lmstudio-community/DeepSeek-R1-Distill-Qwen-1.5B-GGUF~DeepSeek-R1-Distill-Qwen-1.5B-Q8_0.gguf";
@@ -91,24 +91,24 @@ fn batch_decode(
         LlamaSampler::greedy(),
     ]);
 
-    let mut answer = String::new();
+    let mut answer_bytes = Vec::new();
     while n_cur <= 2048 {
-        {
-            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
+        let token = sampler.sample(&ctx, batch.n_tokens() - 1);
 
-            sampler.accept(token);
+        sampler.accept(token);
 
-            if model.is_eog_token(token) {
-                eprintln!();
-                break;
-            }
-
-            let output_string = model.token_to_str(token, Special::Tokenize).unwrap();
-            answer.push_str(&output_string);
-
-            batch.clear();
-            batch.add(token, n_cur, &[0], true)?;
+        if model.is_eog_token(token) {
+            eprintln!();
+            break;
         }
+
+        println!("decoding token {token}");
+
+        // token_to_str is broken, because one token is not necessarily a valid utf8 string\
+        answer_bytes.extend(model.token_to_bytes(token, Special::Tokenize).unwrap());
+
+        batch.clear();
+        batch.add(token, n_cur, &[0], true)?;
 
         n_cur += 1;
 
@@ -127,7 +127,7 @@ fn batch_decode(
         duration.as_secs_f32(),
         n_decode as f32 / duration.as_secs_f32()
     );
-    Ok(answer)
+    Ok(String::from_utf8(answer_bytes).unwrap())
 }
 
 #[test]
@@ -144,99 +144,6 @@ fn llama_test() {
     let token_list = tokenize(&model, &prompt).unwrap();
 
     println!("{}", batch_decode(&model, &mut ctx, &token_list).unwrap());
-}
-
-//===-----------------------------------------------------------------------===
-// code for embedding
-//===-----------------------------------------------------------------------===
-
-fn create_embedding_ctx<'a>(
-    backend: &'a LlamaBackend,
-    model: &'a LlamaModel,
-) -> Result<LlamaContext<'a>> {
-    let ctx_params = LlamaContextParams::default()
-        .with_n_threads_batch(std::thread::available_parallelism()?.get().try_into()?)
-        .with_embeddings(true);
-    model
-        .new_context(backend, ctx_params)
-        .with_context(|| "create embedding ctx failed.")
-}
-
-// TODO: this is wrong
-fn batch_embedding(
-    ctx: &mut LlamaContext,
-    batch: &mut LlamaBatch,
-    s_batch: i32,
-    output: &mut Vec<Vec<f32>>,
-    normalise: bool,
-) -> Result<()> {
-    ctx.clear_kv_cache();
-    ctx.decode(batch).with_context(|| "llama_decode() failed")?;
-
-    for i in 0..s_batch {
-        let embedding = ctx
-            .embeddings_ith(i)
-            .with_context(|| "Failed to get embeddings")?;
-        let output_embeddings = if normalise {
-            normalize(embedding)
-        } else {
-            embedding.to_vec()
-        };
-
-        output.push(output_embeddings);
-    }
-
-    batch.clear();
-
-    Ok(())
-}
-
-fn normalize(input: &[f32]) -> Vec<f32> {
-    let magnitude = input
-        .iter()
-        .fold(0.0, |acc, &val| val.mul_add(val, acc))
-        .sqrt();
-
-    input.iter().map(|&val| val / magnitude).collect()
-}
-
-fn llm_embedding(
-    tokens_lines_list: &Vec<Vec<LlamaToken>>,
-    ctx: &mut LlamaContext,
-) -> Result<Vec<Vec<f32>>> {
-    let mut batch = LlamaBatch::new(512, 1);
-
-    let mut max_seq_id_batch = 0;
-    let mut output = Vec::with_capacity(tokens_lines_list.len());
-
-    let t_main_start = ggml_time_us();
-
-    for tokens in tokens_lines_list {
-        // Flush the batch if the next prompt would exceed our batch size
-        if (batch.n_tokens() as usize + tokens.len()) > 512 {
-            batch_embedding(ctx, &mut batch, max_seq_id_batch, &mut output, true)?;
-            max_seq_id_batch = 0;
-        }
-
-        batch.add_sequence(tokens, max_seq_id_batch, true)?;
-        max_seq_id_batch += 1;
-    }
-    // Handle final batch
-    batch_embedding(ctx, &mut batch, max_seq_id_batch, &mut output, true)?;
-
-    let t_main_end = ggml_time_us();
-
-    let duration = Duration::from_micros((t_main_end - t_main_start) as u64);
-    let total_tokens: usize = tokens_lines_list.iter().map(Vec::len).sum();
-    info!(
-        "Created embeddings for {} tokens in {:.2} s, speed {:.2} t/s\n",
-        total_tokens,
-        duration.as_secs_f32(),
-        total_tokens as f32 / duration.as_secs_f32()
-    );
-
-    println!("{}", ctx.timings());
-    Ok(output)
 }
 
 /// A facade for easier usage of LLM related functions.
@@ -266,23 +173,19 @@ impl Llm {
         let mut ctx = create_llm_ctx(&self.backend, &self.model)?;
         batch_decode(&self.model, &mut ctx, &tokens)
     }
-
-    pub fn embed(&self, text: &str) -> Result<Vec<Vec<f32>>> {
-        let tokens = tokenize(&self.model, text)?;
-        let batched_tokens = tokens.chunks(512).map(|x| x.to_vec()).collect();
-        let mut ctx = create_embedding_ctx(&self.backend, &self.model)?;
-        llm_embedding(&batched_tokens, &mut ctx)
-    }
-
-    pub fn tokenize(&self, text: &str) -> Result<Vec<LlamaToken>> {
-        tokenize(&self.model, text)
-    }
 }
 
 impl Default for Llm {
     fn default() -> Self {
         Llm::new().unwrap()
     }
+}
+
+#[test]
+fn test_hello_world() {
+    let llm = Llm::default();
+    let greetings = llm.complete("hello").unwrap();
+    println!("{}", greetings)
 }
 
 #[test]
@@ -296,16 +199,6 @@ fn test_two_questions() {
 
     let question_two = llm.complete("what is the solution of 1 + 1?").unwrap();
     println!("{question_two}");
-}
-
-#[test]
-fn test_embedding() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
-    let llm = Llm::default();
-    let text = "hello there this is Harry";
-    println!("{:?}", llm.embed(text))
 }
 
 /// Deepseek R1's answers contains two parts

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use super::{Chunk, Document, Entity, Relation};
+use crate::offline::data::{Chunk, Document, Entity, Relation};
 
 refinery::embed_migrations!("migration");
 
@@ -171,12 +171,12 @@ pub(crate) fn query_all_documents(conn: &mut Connection) -> Result<Vec<Document>
     Ok(res)
 }
 
-pub(crate) fn query_all_chunks(conn: &mut Connection) -> Result<Vec<super::Chunk>> {
+pub(crate) fn query_all_chunks(conn: &mut Connection) -> Result<Vec<Chunk>> {
     let mut stmt = conn.prepare(
         "SELECT id, full_doc_id, chunk_index, tokens, content, content_vector FROM chunk",
     )?;
     let chunk_iter = stmt.query_map([], |row| {
-        Ok(super::Chunk {
+        Ok(Chunk {
             id: row.get(0)?,
             full_doc_id: row.get(1)?,
             chunk_index: row.get(2)?,
@@ -192,10 +192,10 @@ pub(crate) fn query_all_chunks(conn: &mut Connection) -> Result<Vec<super::Chunk
     Ok(res)
 }
 
-pub(crate) fn query_all_entities(conn: &mut Connection) -> Result<Vec<super::Entity>> {
+pub(crate) fn query_all_entities(conn: &mut Connection) -> Result<Vec<Entity>> {
     let mut stmt = conn.prepare("SELECT id, name, embedding FROM entity")?;
     let entity_iter = stmt.query_map([], |row| {
-        Ok(super::Entity {
+        Ok(Entity {
             id: row.get(0)?,
             name: row.get(1)?,
             embedding: to_f32(&row.get(2)?),
@@ -208,10 +208,10 @@ pub(crate) fn query_all_entities(conn: &mut Connection) -> Result<Vec<super::Ent
     Ok(res)
 }
 
-pub(crate) fn query_all_relations(conn: &mut Connection) -> Result<Vec<super::Relation>> {
+pub(crate) fn query_all_relations(conn: &mut Connection) -> Result<Vec<Relation>> {
     let mut stmt = conn.prepare("SELECT id, source_id, target_id, relationship FROM relation")?;
     let relation_iter = stmt.query_map([], |row| {
-        Ok(super::Relation {
+        Ok(Relation {
             id: row.get(0)?,
             source_id: row.get(1)?,
             target_id: row.get(2)?,

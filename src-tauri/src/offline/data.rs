@@ -3,42 +3,44 @@
 
 use std::sync::Mutex;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rusqlite::Connection;
+
+use super::sqlite;
 
 type DocumentId = i64;
 #[derive(Debug, Clone)]
 pub struct Document {
-    id: DocumentId,
-    doc_name: String,
+    pub id: DocumentId,
+    pub doc_name: String,
 }
 
 type ChunkId = i64;
 #[derive(Debug, Clone)]
 pub struct Chunk {
-    id: ChunkId,
-    full_doc_id: DocumentId,
-    chunk_index: i64,
-    tokens: usize,
-    content: String,
-    content_vector: Vec<f32>,
+    pub id: ChunkId,
+    pub full_doc_id: DocumentId,
+    pub chunk_index: i64,
+    pub tokens: usize,
+    pub content: String,
+    pub content_vector: Vec<f32>,
 }
 
 type EntityId = i64;
 #[derive(Debug, Clone)]
 pub struct Entity {
-    id: EntityId,
-    name: String,
-    embedding: Vec<f32>,
+    pub id: EntityId,
+    pub name: String,
+    pub embedding: Vec<f32>,
 }
 
 type RelationId = i64;
 #[derive(Debug, Clone)]
 pub struct Relation {
-    id: RelationId,
-    source_id: EntityId,
-    target_id: EntityId,
-    relationship: String,
+    pub id: RelationId,
+    pub source_id: EntityId,
+    pub target_id: EntityId,
+    pub relationship: String,
 }
 
 impl Relation {
@@ -52,8 +54,6 @@ impl Relation {
         }
     }
 }
-
-mod sqlite;
 
 pub struct Store {
     conn: Mutex<Connection>,
