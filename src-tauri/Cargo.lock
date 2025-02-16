@@ -2791,6 +2791,25 @@ name = "memd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "memd_rag",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-http",
+ "tauri-plugin-shell",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "memd_rag"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "axum",
  "candle-core",
  "candle-nn",
@@ -2802,21 +2821,12 @@ dependencies = [
  "safetensors 0.5.2",
  "serde",
  "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-http",
- "tauri-plugin-shell",
  "tokenizers",
  "tokio",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
-
-[[package]]
-name = "memd_rag"
-version = "0.1.0"
 
 [[package]]
 name = "memmap2"

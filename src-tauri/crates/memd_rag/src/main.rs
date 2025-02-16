@@ -5,7 +5,7 @@ use std::{
 };
 
 use axum::{extract::State, routing::post, Json, Router};
-use memd_lib::offline::LocalComponent;
+use memd_rag::LocalComponent;
 use serde::{Deserialize, Serialize};
 use tokio::signal::{unix::signal, unix::SignalKind};
 use tracing::info;
@@ -122,7 +122,7 @@ async fn bench_store(
     text: Json<StorePayload>,
 ) -> &'static str {
     bs_state.metrics.start_embedding();
-    memd_lib::offline::add_local(text.0 .0, &mut bs_state.local_comps)
+    memd_rag::add_local(text.0 .0, &mut bs_state.local_comps)
         .await
         .unwrap();
     bs_state.metrics.end_embedding();
@@ -131,7 +131,7 @@ async fn bench_store(
 
 async fn bench_query(State(mut bs_state): State<AppState>, query: String) -> String {
     bs_state.metrics.start_query();
-    let answer = memd_lib::offline::query_local(&query, &mut bs_state.local_comps)
+    let answer = memd_rag::query_local(&query, &mut bs_state.local_comps)
         .await
         .unwrap_or("not found".to_string());
     bs_state.metrics.end_query();
@@ -165,6 +165,10 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+
     let app = App::new(LocalComponent::default());
 
     let app_state = AppState(Arc::new(app));

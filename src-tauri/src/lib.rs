@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use offline::LocalComponent;
+use memd_rag::LocalComponent;
 use online::{build_remote_app, RemoteState};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tokio::sync::RwLock;
@@ -9,7 +9,6 @@ use anyhow::Result;
 use tauri::Manager;
 use tracing::info;
 
-pub mod offline;
 pub mod online;
 
 #[derive(Clone, Debug)]
@@ -52,7 +51,7 @@ fn build_app(app: &mut tauri::App, config: &Config) -> Result<(), Box<dyn std::e
 #[tauri::command]
 async fn chat(question: &str, state: tauri::State<'_, RwLock<ServeMode>>) -> Result<String, ()> {
     let res = match &mut *state.write().await {
-        ServeMode::LOCAL(local_state) => offline::chat_local(question, local_state).await,
+        ServeMode::LOCAL(local_state) => memd_rag::chat_local(question, local_state).await,
         ServeMode::REMOTE(remote_state) => online::chat_remote(question, remote_state).await,
     };
     Ok(res.unwrap_or_else(|err| format!("An error occurred during our conversation:\n{}", err)))
@@ -72,7 +71,7 @@ async fn pick_file(
 ) -> Result<(), ()> {
     let file_path = pick_file_async(app_handle).await.ok_or(())?;
     match &*state.read().await {
-        ServeMode::LOCAL { .. } => crate::offline::upload_local().await,
+        ServeMode::LOCAL { .. } => memd_rag::upload_local().await,
         ServeMode::REMOTE(remote_state) => crate::online::upload_file(file_path, remote_state)
             .await
             .unwrap(),
