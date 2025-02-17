@@ -80,9 +80,6 @@ fn batch_decode(
     ctx.decode(&mut batch)
         .with_context(|| "llama decode failed")?;
 
-    let mut n_cur = batch.n_tokens();
-    let mut n_decode = 0;
-
     let t_main_start = ggml_time_us();
 
     let mut sampler = LlamaSampler::chain_simple([
@@ -91,6 +88,8 @@ fn batch_decode(
         LlamaSampler::greedy(),
     ]);
 
+    let mut n_cur = batch.n_tokens();
+    let mut n_decode = 0;
     let mut answer_bytes = Vec::new();
     while n_cur <= 2048 {
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
@@ -102,18 +101,13 @@ fn batch_decode(
             break;
         }
 
-        println!("decoding token {token}");
-
         // token_to_str is broken, because one token is not necessarily a valid utf8 string\
         answer_bytes.extend(model.token_to_bytes(token, Special::Tokenize).unwrap());
 
         batch.clear();
         batch.add(token, n_cur, &[0], true)?;
-
-        n_cur += 1;
-
         ctx.decode(&mut batch)?;
-
+        n_cur += 1;
         n_decode += 1;
     }
 
