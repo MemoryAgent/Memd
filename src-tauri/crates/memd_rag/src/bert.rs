@@ -45,7 +45,11 @@ pub fn normalize_l2(v: &Tensor) -> Result<Tensor> {
     Ok(v.broadcast_div(&v.sqr()?.sum_all()?.sqrt()?)?)
 }
 
-pub fn encode_prompt(s: &str, tokenizer: &mut Tokenizer, model: &BertModel) -> Result<Tensor> {
+pub fn encode_single_sentence(
+    s: &str,
+    tokenizer: &mut Tokenizer,
+    model: &BertModel,
+) -> Result<Tensor> {
     let device = &model.device;
     let tokenizer = tokenizer
         .with_padding(None)

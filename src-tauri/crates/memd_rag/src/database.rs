@@ -43,18 +43,6 @@ pub struct Relation {
     pub relationship: String,
 }
 
-impl Relation {
-    pub fn parse(s: &str) -> Self {
-        let xs: Vec<String> = s.split(',').map(|x| x.to_string()).collect();
-        Relation {
-            id: 0,
-            source_id: 0,
-            target_id: 0,
-            relationship: xs[1].clone(),
-        }
-    }
-}
-
 pub struct Store {
     conn: Mutex<Connection>,
 }

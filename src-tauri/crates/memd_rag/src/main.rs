@@ -119,10 +119,10 @@ async fn bench_open(State(mut bs_state): State<AppState>) -> &'static str {
 
 async fn bench_store(
     State(mut bs_state): State<AppState>,
-    text: Json<StorePayload>,
+    Json(text): Json<StorePayload>,
 ) -> &'static str {
     bs_state.metrics.start_embedding();
-    memd_rag::add_local(text.0 .0, &mut bs_state.local_comps)
+    memd_rag::add_local(text.0, &mut bs_state.local_comps)
         .await
         .unwrap();
     bs_state.metrics.end_embedding();

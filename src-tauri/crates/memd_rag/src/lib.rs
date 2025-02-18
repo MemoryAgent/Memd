@@ -1,18 +1,20 @@
 use anyhow::Result;
 use candle_transformers::models::bert::BertModel;
+use sqlite::insert_document;
 use std::fmt::Debug;
 use tokenizers::Tokenizer;
 
 mod bert;
 mod cache;
-mod data;
+mod database;
 mod llm;
+mod operation;
 mod sqlite;
 
 use crate::{
-    bert::{build_model_and_tokenizer, encode_prompt, encode_sentence},
+    bert::{build_model_and_tokenizer, encode_sentence, encode_single_sentence},
     cache::{InMemCache, VecStore},
-    data::{Chunk, Store},
+    database::{Chunk, Store},
     llm::Llm,
 };
 
@@ -55,8 +57,22 @@ pub async fn add_local(text: Vec<String>, local_comps: &mut LocalComponent) -> R
     Ok(())
 }
 
+pub async fn insert(doc: &operation::Document, local_comps: &mut LocalComponent) -> Result<()> {
+    let stored_doc = local_comps.store.add_document(&doc.name)?;
+    let chunks = operation::chunk_document(
+        doc,
+        stored_doc.id,
+        512,
+        128,
+        &mut local_comps.tokenizer,
+        &local_comps.bert,
+    )
+    .await?;
+    todo!()
+}
+
 pub async fn query_local(prompt: &str, local_comps: &mut LocalComponent) -> Result<String> {
-    let encoded = encode_prompt(prompt, &mut local_comps.tokenizer, &local_comps.bert)?;
+    let encoded = encode_single_sentence(prompt, &mut local_comps.tokenizer, &local_comps.bert)?;
     let memory = local_comps.cache.query(&encoded)?;
     Ok(memory.text)
 }

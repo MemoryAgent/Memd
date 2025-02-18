@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use crate::data::{Chunk, Document, Entity, Relation};
+use crate::database::{Chunk, Document, Entity, Relation};
 
 refinery::embed_migrations!("migration");
 
