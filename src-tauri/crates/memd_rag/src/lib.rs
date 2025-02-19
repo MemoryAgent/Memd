@@ -1,8 +1,9 @@
 use anyhow::Result;
 use candle_transformers::models::bert::BertModel;
-use sqlite::insert_document;
+use database::Entity;
 use std::fmt::Debug;
 use tokenizers::Tokenizer;
+use tracing::info;
 
 mod bert;
 mod cache;
@@ -68,7 +69,58 @@ pub async fn insert(doc: &operation::Document, local_comps: &mut LocalComponent)
         &local_comps.bert,
     )
     .await?;
-    todo!()
+    for chunk in &chunks {
+        let stored_chunk = local_comps.store.add_chunk(chunk)?;
+        info!("inserted chunk {:?}", stored_chunk);
+
+        // TODO: deal with empty results....
+        let entities = operation::chunk_extract_entity(
+            chunk,
+            &local_comps.llm,
+            &mut local_comps.tokenizer,
+            &local_comps.bert,
+        )
+        .await?;
+
+        if entities.is_empty() {
+            continue;
+        }
+
+        let stored_entites = entities
+            .iter()
+            .map(|entity| local_comps.store.add_entity(entity, &stored_chunk))
+            .collect::<Result<Vec<Entity>>>()?;
+        info!("inserted entities {:?}", stored_entites);
+
+        let relations =
+            operation::chunk_extract_relation(chunk, &entities, &local_comps.llm).await?;
+
+        if relations.is_empty() {
+            continue;
+        }
+
+        let entity_name_to_id = stored_entites
+            .iter()
+            .map(|entity| (entity.name.clone(), entity.id))
+            .collect::<std::collections::HashMap<_, _>>();
+        let relations = relations
+            .iter()
+            .map(|relation| local_comps.store.add_relation(relation, &entity_name_to_id))
+            .collect::<Result<Vec<_>>>()?;
+        info!("inserted relation {:?}", relations);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_insert() {
+    tracing_subscriber::fmt::init();
+    let doc = operation::Document {
+        name: "test".to_string(),
+        content: "This is a test document".to_string(),
+    };
+    let mut local_comps = LocalComponent::default();
+    insert(&doc, &mut local_comps).await.unwrap();
 }
 
 pub async fn query_local(prompt: &str, local_comps: &mut LocalComponent) -> Result<String> {

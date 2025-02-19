@@ -99,7 +99,7 @@ pub struct Entity {
     pub embedding: Tensor,
 }
 
-async fn chunk_extract_entity(
+pub(crate) async fn chunk_extract_entity(
     Chunk { content, .. }: &Chunk,
     llm: &Llm,
     tokenizer: &mut Tokenizer,
@@ -135,9 +135,9 @@ impl Relation {
     }
 }
 
-async fn chunk_extract_relation(
+pub async fn chunk_extract_relation(
     Chunk { content, .. }: &Chunk,
-    entities: Vec<Entity>,
+    entities: &Vec<Entity>,
     llm: &Llm,
 ) -> Result<Vec<Relation>> {
     let entity_names = entities.iter().map(|x| x.name.clone()).collect();

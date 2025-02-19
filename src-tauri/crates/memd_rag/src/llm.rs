@@ -231,12 +231,14 @@ The answer is quite straight forward.
 fn build_ee_prompt(q: &str) -> String {
     format!(
         "---
-Extract entities means to identify important nouns from a sentence, such as:
+Extract entities means to identify important nouns from a sentence.
+---
+Example:
 Q: Which country does Tolstoy and Tchaikovsky live?
 You should reply with a comma separated string such as:
 Tolstoy,Tchaikovsky
 ---
-Please extract all entities in this question:
+Now please extract all entities in following text:
 {}",
         q
     )
@@ -264,6 +266,7 @@ fn extract_entity(q: &str, llm: &Llm) -> Result<Vec<String>> {
 fn vec_to_csv(v: &Vec<String>) -> String {
     v.iter().fold(String::new(), |mut acc, x| {
         acc.push_str(x);
+        acc.push(',');
         acc
     })
 }

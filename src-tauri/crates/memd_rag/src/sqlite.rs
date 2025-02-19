@@ -110,7 +110,7 @@ pub(crate) fn insert_entity(
     embedding: &Vec<f32>,
 ) -> Result<Entity> {
     conn.query_row(
-        "INSERT INTO entity (name, embedding) VALUES (?, ?)",
+        "INSERT INTO entity (name, embedding) VALUES (?, ?) RETURNING *",
         (name, to_binary_string(embedding)),
         |row| {
             Ok(Entity {
@@ -130,7 +130,7 @@ pub(crate) fn insert_relation(
     relationship: &str,
 ) -> Result<Relation> {
     conn.query_row(
-        "INSERT INTO relation (source_id, target_id, relationship) VALUES (?, ?, ?)",
+        "INSERT INTO relation (source_id, target_id, relationship) VALUES (?, ?, ?) RETURNING *",
         (source_id, target_id, relationship),
         |f| {
             Ok(Relation {
