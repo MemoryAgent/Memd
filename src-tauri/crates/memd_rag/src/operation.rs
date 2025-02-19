@@ -55,7 +55,7 @@ pub async fn chunk_document(
         let end = std::cmp::min(start + max_tokens, tokens.len());
         let chunk_tokens = tokens[start..end].to_vec();
         let chunk_content = tokenizer_impl
-            .decode(&chunk_tokens, false)
+            .decode(&chunk_tokens, true)
             .map_err(anyhow::Error::msg)?;
         let token_ids = Tensor::new(&chunk_tokens[..], &embedder.device)?.unsqueeze(0)?;
         let embedding = embedder
@@ -109,10 +109,9 @@ pub(crate) async fn chunk_extract_entity(
     entity_names
         .iter()
         .map(|x| {
-            Ok(Entity {
-                name: x.to_string(),
-                embedding: encode_single_sentence(x, tokenizer, embedder)?,
-            })
+            let name = x.trim().to_lowercase();
+            let embedding = encode_single_sentence(&name, tokenizer, embedder)?;
+            Ok(Entity { name, embedding })
         })
         .collect()
 }
@@ -128,9 +127,9 @@ impl Relation {
     pub fn parse(s: &str) -> Self {
         let xs: Vec<String> = s.split(',').map(|x| x.to_string()).collect();
         Relation {
-            source_name: xs[0].clone(),
-            target_name: xs[2].clone(),
-            relationship: xs[1].clone(),
+            source_name: xs[0].trim().to_string(),
+            target_name: xs[2].trim().to_string(),
+            relationship: xs[1].trim().to_string(),
         }
     }
 }
@@ -142,4 +141,19 @@ pub async fn chunk_extract_relation(
 ) -> Result<Vec<Relation>> {
     let entity_names = entities.iter().map(|x| x.name.clone()).collect();
     llm.extract_relation(&content, &entity_names)
+}
+
+/// TODO: Implement graph search
+pub async fn graph_search(
+    entities: &Vec<crate::database::Entity>,
+    relations: &Vec<crate::database::Relation>,
+) -> Result<Vec<i64>> {
+    let mut all_entity_ids: Vec<i64> = entities.iter().map(|x| x.id).collect();
+    let all_entity_ids_in_relation: Vec<i64> = relations
+        .iter()
+        .flat_map(|x| vec![x.source_id, x.target_id])
+        .collect();
+    all_entity_ids.extend(all_entity_ids_in_relation);
+    all_entity_ids.dedup();
+    Ok(all_entity_ids)
 }

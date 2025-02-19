@@ -103,13 +103,49 @@ impl Store {
         relation: &operation::Relation,
         mapping: &HashMap<String, EntityId>,
     ) -> Result<Relation> {
-        let source_id = mapping.get(&relation.source_name).unwrap();
-        let target_id = mapping.get(&relation.target_name).unwrap();
+        let source_id = mapping.get(&relation.source_name.to_lowercase()).unwrap();
+        let target_id = mapping.get(&relation.target_name.to_lowercase()).unwrap();
         sqlite::insert_relation(
             &mut self.conn.lock().unwrap(),
             *source_id,
             *target_id,
             &relation.relationship,
         )
+    }
+
+    pub fn find_entities_by_names(&self, names: &Vec<String>) -> Result<Vec<Entity>> {
+        let mut conn = self.conn.lock().unwrap();
+        let mut entities = Vec::new();
+        for name in names {
+            let name = name.to_lowercase();
+            let entity = sqlite::find_entity_by_name(&mut conn, &name)?;
+            if let Some(entity) = entity {
+                entities.push(entity);
+            }
+        }
+        Ok(entities)
+    }
+
+    pub fn find_relation_by_entities(&self, entities: &Vec<Entity>) -> Result<Vec<Relation>> {
+        let mut conn = self.conn.lock().unwrap();
+        let vn = entities
+            .iter()
+            .flat_map(|entity| sqlite::find_relation_by_entity_ids(&mut conn, entity.id).unwrap())
+            .collect();
+        Ok(vn)
+    }
+
+    pub fn find_entities_by_ids(&self, ids: &Vec<EntityId>) -> Result<Vec<Entity>> {
+        let mut conn = self.conn.lock().unwrap();
+        ids.iter()
+            .map(|id| sqlite::find_entity_by_id(&mut conn, *id))
+            .collect()
+    }
+
+    pub fn find_chunks_by_entity_ids(&self, ids: &Vec<EntityId>) -> Result<Vec<Chunk>> {
+        let mut conn = self.conn.lock().unwrap();
+        ids.iter()
+            .map(|id| sqlite::find_chunk_by_entity_id(&mut conn, *id))
+            .collect()
     }
 }

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::database::{Chunk, Document, Entity, Relation};
 
@@ -247,4 +247,78 @@ pub(crate) fn query_chunks_by_doc_id(
         res.push(chunk.unwrap());
     }
     Ok(res)
+}
+
+pub(crate) fn find_entity_by_name(conn: &mut Connection, name: &str) -> Result<Option<Entity>> {
+    conn.query_row(
+        "SELECT id, name, embedding FROM entity WHERE name = ?",
+        [name],
+        |row| {
+            Ok(Entity {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                embedding: to_f32(&row.get(2)?),
+            })
+        },
+    )
+    .optional()
+    .with_context(|| format!("Failed to find entity by name {}", name))
+}
+
+pub(crate) fn find_relation_by_entity_ids(
+    conn: &mut Connection,
+    entity_id: i64,
+) -> Result<Vec<Relation>> {
+    let mut stmt = conn.prepare(
+            "SELECT id, source_id, target_id, relationship FROM relation WHERE source_id = ? OR target_id = ?"
+        ).with_context(|| "Failed to prepare statement")?;
+    let relation_map = stmt
+        .query_map([entity_id, entity_id], |row| {
+            Ok(Relation {
+                id: row.get(0)?,
+                source_id: row.get(1)?,
+                target_id: row.get(2)?,
+                relationship: row.get(3)?,
+            })
+        })
+        .with_context(|| "Failed to query relation by entity id")?;
+
+    let mut res = Vec::new();
+    for relation in relation_map {
+        res.push(relation.unwrap());
+    }
+    Ok(res)
+}
+
+pub(crate) fn find_entity_by_id(conn: &mut Connection, entity_id: i64) -> Result<Entity> {
+    conn.query_row(
+        "SELECT id, name, embedding FROM entity WHERE id = ?",
+        [entity_id],
+        |row| {
+            Ok(Entity {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                embedding: to_f32(&row.get(2)?),
+            })
+        },
+    )
+    .with_context(|| "Failed to find entity by id")
+}
+
+pub(crate) fn find_chunk_by_entity_id(conn: &mut Connection, entity_id: i64) -> Result<Chunk> {
+    conn.query_row(
+        "SELECT chunk.id, chunk.full_doc_id, chunk.chunk_index, chunk.tokens, chunk.content, chunk.content_vector FROM chunk JOIN entity_chunk ON chunk.id = entity_chunk.chunk_id WHERE entity_chunk.entity_id = ?",
+        [entity_id],
+        |row| {
+            Ok(Chunk {
+                id: row.get(0)?,
+                full_doc_id: row.get(1)?,
+                chunk_index: row.get(2)?,
+                tokens: row.get(3)?,
+                content: row.get(4)?,
+                content_vector: to_f32(&row.get(5)?),
+            })
+        },
+    )
+    .with_context(|| "Failed to find chunk by entity id")
 }

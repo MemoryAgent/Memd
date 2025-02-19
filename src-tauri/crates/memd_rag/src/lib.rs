@@ -1,6 +1,8 @@
 use anyhow::Result;
 use candle_transformers::models::bert::BertModel;
 use database::Entity;
+use llm::build_complete_prompt;
+use operation::graph_search;
 use std::fmt::Debug;
 use tokenizers::Tokenizer;
 use tracing::info;
@@ -73,7 +75,6 @@ pub async fn insert(doc: &operation::Document, local_comps: &mut LocalComponent)
         let stored_chunk = local_comps.store.add_chunk(chunk)?;
         info!("inserted chunk {:?}", stored_chunk);
 
-        // TODO: deal with empty results....
         let entities = operation::chunk_extract_entity(
             chunk,
             &local_comps.llm,
@@ -117,10 +118,49 @@ async fn test_insert() {
     tracing_subscriber::fmt::init();
     let doc = operation::Document {
         name: "test".to_string(),
-        content: "This is a test document".to_string(),
+        content: "Beijing is the capital of China.".to_string(),
     };
     let mut local_comps = LocalComponent::default();
     insert(&doc, &mut local_comps).await.unwrap();
+}
+
+pub async fn query(question: &str, local_comps: &mut LocalComponent) -> Result<String> {
+    let entities = local_comps.llm.extract_entities(question)?;
+    let matching_entities = local_comps.store.find_entities_by_names(&entities)?;
+    let relations = local_comps
+        .store
+        .find_relation_by_entities(&matching_entities)?;
+    let all_entity_ids = graph_search(&matching_entities, &relations).await?;
+    let all_entities = local_comps.store.find_entities_by_ids(&all_entity_ids)?;
+    let chunks = local_comps
+        .store
+        .find_chunks_by_entity_ids(&all_entity_ids)?;
+    let texts = chunks.iter().map(|chunk| chunk.content.clone()).collect();
+    let prompt = build_complete_prompt(
+        question,
+        if all_entities.len() > 0 {
+            &all_entities[0].name
+        } else {
+            ""
+        },
+        &vec![],
+        &texts,
+    );
+    local_comps.llm.complete(&prompt)
+}
+
+#[tokio::test]
+async fn test_query() {
+    tracing_subscriber::fmt::init();
+    let doc = operation::Document {
+        name: "test".to_string(),
+        content: "Beijing is the capital of China.".to_string(),
+    };
+    let mut local_comps = LocalComponent::default();
+    insert(&doc, &mut local_comps).await.unwrap();
+    let question = "What is the capital of China?";
+    let answer = query(question, &mut local_comps).await.unwrap();
+    println!("answer: {}", answer);
 }
 
 pub async fn query_local(prompt: &str, local_comps: &mut LocalComponent) -> Result<String> {

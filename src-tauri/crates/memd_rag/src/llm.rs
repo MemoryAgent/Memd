@@ -237,6 +237,8 @@ Example:
 Q: Which country does Tolstoy and Tchaikovsky live?
 You should reply with a comma separated string such as:
 Tolstoy,Tchaikovsky
+
+If you find no entities, please reply with None.
 ---
 Now please extract all entities in following text:
 {}",
@@ -260,7 +262,11 @@ fn extract_entity(q: &str, llm: &Llm) -> Result<Vec<String>> {
     info!("raw output {}", answer);
     let (thinking, answer) = extract_answer(&answer);
     info!("thinking procedure is {}. answer is {}", thinking, answer);
-    Ok(answer.split(',').map(|x| x.to_string()).collect())
+    Ok(if answer == "None" {
+        vec![]
+    } else {
+        answer.split(',').map(|x| x.to_string()).collect()
+    })
 }
 
 fn vec_to_csv(v: &Vec<String>) -> String {
@@ -279,6 +285,8 @@ Respond with triples (entity, predicate, entity) representing relationships betw
 - Each triple should contain at least one, but preferably two, of the named entities in the list for each passage.
 - Clearly resolve pronouns to their specific names to maintain clarity.
 - the triple should be formatted as comma-separated lists. different triples are delimited by line break.
+
+If you find no relationships, please reply with [].
 ---
 Example
 Passage: Tolstoy lived in Russia.
@@ -310,12 +318,16 @@ fn get_re_entity(passage: &str, entities: &Vec<String>, llm: &Llm) -> Result<Vec
     info!("raw output {}", answer);
     let (thinking, answer) = extract_answer(&answer);
     info!("thinking procedure is {}. answer is {}", thinking, answer);
-    Ok(answer
-        .to_string()
-        .lines()
-        .map(|l| l.to_string())
-        .map(|x| Relation::parse(&x))
-        .collect())
+    Ok(if answer == "[]" {
+        vec![]
+    } else {
+        answer
+            .to_string()
+            .lines()
+            .map(|l| l.to_string())
+            .map(|x| Relation::parse(&x))
+            .collect()
+    })
 }
 
 fn build_parent_prompt(r: &str) -> String {
@@ -353,7 +365,7 @@ fn get_parent_entity(v: &Vec<String>, llm: &Llm) -> Result<String> {
     Ok(answer.to_string())
 }
 
-fn build_complete_prompt(
+pub fn build_complete_prompt(
     q: &str,
     topic_entity: &str,
     relations: &Vec<Relation>,
