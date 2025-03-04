@@ -96,9 +96,7 @@ fn clear_history() {
 
 #[cfg(target_os = "android")]
 mod port {
-    fn port_options() {
-        
-    }
+    fn port_options() {}
 }
 
 #[cfg(not(target_os = "android"))]

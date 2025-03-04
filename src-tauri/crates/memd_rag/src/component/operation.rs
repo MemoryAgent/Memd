@@ -10,7 +10,7 @@ use tokenizers::Tokenizer;
 
 use anyhow::Result;
 
-use crate::{
+use super::{
     bert::{encode_single_sentence, normalize_l2},
     llm::Llm,
 };
@@ -78,7 +78,7 @@ pub async fn chunk_document(
 
 #[tokio::test]
 async fn test_chunk_document() {
-    use crate::bert::build_model_and_tokenizer;
+    use super::bert::build_model_and_tokenizer;
 
     let (embedder, tokenizer) = build_model_and_tokenizer(None, None).unwrap();
     let doc = Document {
@@ -145,8 +145,8 @@ pub async fn chunk_extract_relation(
 
 /// TODO: Implement graph search
 pub async fn graph_search(
-    entities: &Vec<crate::database::Entity>,
-    relations: &Vec<crate::database::Relation>,
+    entities: &Vec<super::database::Entity>,
+    relations: &Vec<super::database::Relation>,
 ) -> Result<Vec<i64>> {
     let mut all_entity_ids: Vec<i64> = entities.iter().map(|x| x.id).collect();
     let all_entity_ids_in_relation: Vec<i64> = relations

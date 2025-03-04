@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::vec;
 use tracing::info;
 
-use crate::operation::Relation;
+use super::operation::Relation;
 
 const DEEPSEEK_R1_1B: &str =
     "lmstudio-community/DeepSeek-R1-Distill-Qwen-1.5B-GGUF~DeepSeek-R1-Distill-Qwen-1.5B-Q8_0.gguf";

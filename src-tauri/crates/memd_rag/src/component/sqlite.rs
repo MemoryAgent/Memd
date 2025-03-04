@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::database::{Chunk, Document, Entity, Relation};
+use super::database::{Chunk, Document, Entity, Relation};
 
 refinery::embed_migrations!("migration");
 
@@ -228,12 +228,12 @@ pub(crate) fn query_all_relations(conn: &mut Connection) -> Result<Vec<Relation>
 pub(crate) fn query_chunks_by_doc_id(
     conn: &mut Connection,
     doc_id: i64,
-) -> Result<Vec<super::Chunk>> {
+) -> Result<Vec<super::database::Chunk>> {
     let mut stmt = conn.prepare(
         "SELECT id, full_doc_id, chunk_index, tokens, content, content_vector FROM chunk WHERE full_doc_id = ?",
     )?;
     let chunk_iter = stmt.query_map([doc_id], |row| {
-        Ok(super::Chunk {
+        Ok(super::database::Chunk {
             id: row.get(0)?,
             full_doc_id: row.get(1)?,
             chunk_index: row.get(2)?,

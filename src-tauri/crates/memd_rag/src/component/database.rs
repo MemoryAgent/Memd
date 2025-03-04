@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Mutex};
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::{operation, sqlite::run_migrations};
+use super::{operation, sqlite::run_migrations};
 
 use super::sqlite;
 
