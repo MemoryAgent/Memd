@@ -10,7 +10,50 @@ use tracing::info;
 mod bert;
 mod cache;
 mod database;
+// TODO: compile llama.cpp in android
+#[cfg(not(target_os = "android"))]
 mod llm;
+#[cfg(target_os = "android")]
+mod llm {
+    use super::*;
+    use crate::operation::Relation;
+
+    pub struct Llm;
+
+    impl Default for Llm {
+        fn default() -> Self {
+            Self
+        }
+    }
+
+    impl Llm {
+        pub fn extract_entities(&self, _question: &str) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+
+        pub fn complete(&self, _prompt: &str) -> Result<String> {
+            Ok("".to_string())
+        }
+
+        pub fn extract_relation(
+            &self,
+            _question: &str,
+            _entities: &Vec<String>,
+        ) -> Result<Vec<Relation>> {
+            Ok(vec![])
+        }
+    }
+
+    pub fn build_complete_prompt(
+        _question: &str,
+        _entity: &str,
+        _relations: &Vec<Relation>,
+        _texts: &Vec<String>,
+    ) -> String {
+        "".to_string()
+    }
+}
+
 mod operation;
 mod sqlite;
 
@@ -135,7 +178,7 @@ pub async fn query(question: &str, local_comps: &mut LocalComponent) -> Result<S
     let chunks = local_comps
         .store
         .find_chunks_by_entity_ids(&all_entity_ids)?;
-    let texts = chunks.iter().map(|chunk| chunk.content.clone()).collect();
+    let texts: Vec<String> = chunks.iter().map(|chunk| chunk.content.clone()).collect();
     let prompt = build_complete_prompt(
         question,
         if all_entities.len() > 0 {

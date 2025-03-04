@@ -94,6 +94,20 @@ fn clear_history() {
     todo!("")
 }
 
+#[cfg(target_os = "android")]
+mod port {
+    fn port_options() {
+        
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+mod port {
+    fn port_options() {
+        // std::env::set_var("HF_HOME", "");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

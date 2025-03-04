@@ -1,0 +1,21 @@
+[target.'cfg(any(target_arch = "arm", target_arch = "aarch64"))']
+
+rustflags = ["-C", "target-feature=+fp16"]
+
+
+[env]
+
+ANDROID_HOME = "/root/CS/ai/Memd/local/Android/Sdk"
+
+ANDROID_NDK = "/root/CS/ai/Memd/local/Android/Sdk/ndk/28.0.13004108"
+
+CMAKE_ANDROID_NDK = "/root/CS/ai/Memd/local/Android/Sdk/ndk/28.0.13004108"
+
+CFLAGS = "--sysroot /root/CS/ai/Memd/local/Android/Sdk/ndk/28.0.13004108/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+
+# https://github.com/rust-lang/rust-bindgen/issues/1229
+
+# TODO: change armv7-none-linux-androideabi2 to aarch64-linux-android28 then everything works....????
+
+BINDGEN_EXTRA_CLANG_ARGS="--sysroot /root/CS/ai/Memd/local/Android/Sdk/ndk/28.0.13004108/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+# CMAKE_ANDROID_ARCH_ABI="arm64-v8a"
