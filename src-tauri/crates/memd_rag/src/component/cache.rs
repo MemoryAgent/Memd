@@ -1,3 +1,7 @@
+//! cache is not appropriate name for this module. It is a vector search engine module
+//! for this RAG framework.
+//!
+
 use anyhow::{Ok, Result};
 use candle_core::Tensor;
 use tracing::info;

@@ -10,6 +10,7 @@ pub mod sqlite;
 #[cfg(not(target_os = "android"))]
 pub mod llm;
 
+// TODO: Remove this hack after compile llama.cpp
 #[cfg(target_os = "android")]
 pub mod llm {
     use super::*;

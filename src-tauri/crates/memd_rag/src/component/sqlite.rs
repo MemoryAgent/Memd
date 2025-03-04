@@ -225,6 +225,24 @@ pub(crate) fn query_all_relations(conn: &mut Connection) -> Result<Vec<Relation>
     Ok(res)
 }
 
+pub(crate) fn query_chunk_by_id(conn: &mut Connection, chunk_id: i64) -> Result<Chunk> {
+    conn.query_row(
+        "SELECT id, full_doc_id, chunk_index, tokens, content, content_vector FROM chunk WHERE id = ?",
+        [chunk_id],
+        |row| {
+            Ok(Chunk {
+                id: row.get(0)?,
+                full_doc_id: row.get(1)?,
+                chunk_index: row.get(2)?,
+                tokens: row.get(3)?,
+                content: row.get(4)?,
+                content_vector: to_f32(&row.get(5)?),
+            })
+        },
+    )
+    .with_context(|| format!("Failed to query chunk by id {}", chunk_id))
+}
+
 pub(crate) fn query_chunks_by_doc_id(
     conn: &mut Connection,
     doc_id: i64,

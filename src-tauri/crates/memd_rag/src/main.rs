@@ -5,13 +5,13 @@ use std::{
 };
 
 use axum::{extract::State, routing::post, Json, Router};
-use memd_rag::component::LocalComponent;
+use memd_rag::component::{operation::Document, LocalComponent};
 use serde::{Deserialize, Serialize};
 use tokio::signal::{unix::signal, unix::SignalKind};
 use tracing::info;
 
 #[derive(Deserialize)]
-struct StorePayload(Vec<String>);
+struct StorePayload(String);
 
 /// [`Timer`] is used to record the processing time of this program.
 #[derive(Default)]
@@ -122,18 +122,29 @@ async fn bench_store(
     Json(text): Json<StorePayload>,
 ) -> &'static str {
     bs_state.metrics.start_embedding();
-    memd_rag::method::add_local(text.0, &mut bs_state.local_comps)
-        .await
-        .unwrap();
+    memd_rag::method::insert(
+        &Document {
+            name: "dialogue".to_string(),
+            content: text.0,
+        },
+        &mut bs_state.local_comps,
+        memd_rag::method::RAGMethods::NoRAG,
+    )
+    .await
+    .unwrap();
     bs_state.metrics.end_embedding();
     "added"
 }
 
 async fn bench_query(State(mut bs_state): State<AppState>, query: String) -> String {
     bs_state.metrics.start_query();
-    let answer = memd_rag::method::query_local(&query, &mut bs_state.local_comps)
-        .await
-        .unwrap_or("not found".to_string());
+    let answer = memd_rag::method::query(
+        &query,
+        &mut bs_state.local_comps,
+        memd_rag::method::RAGMethods::NoRAG,
+    )
+    .await
+    .unwrap_or("not found".to_string());
     bs_state.metrics.end_query();
     answer
 }

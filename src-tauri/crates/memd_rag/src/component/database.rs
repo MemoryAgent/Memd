@@ -3,7 +3,7 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 use super::{operation, sqlite::run_migrations};
@@ -47,21 +47,44 @@ pub struct Relation {
 
 pub struct Store {
     conn: Mutex<Connection>,
+    text_index: usearch::Index,
 }
 
 impl Default for Store {
     fn default() -> Self {
         let mut conn = Connection::open_in_memory().unwrap();
         run_migrations(&mut conn).unwrap();
-        Self { conn: conn.into() }
+        let text_index = usearch::Index::new(&usearch::IndexOptions {
+            dimensions: 384,
+            ..Default::default()
+        })
+        .unwrap();
+        text_index.reserve(100).unwrap();
+        Self {
+            conn: conn.into(),
+            text_index,
+        }
     }
 }
 
 impl Store {
-    pub fn new(path: &str) -> Self {
-        let mut conn = Connection::open(path).unwrap();
+    pub fn new(db_path: &str, index_path: &str) -> Self {
+        let mut conn = Connection::open(db_path).unwrap();
         run_migrations(&mut conn).unwrap();
-        Self { conn: conn.into() }
+
+        let index = match db_path {
+            ":memory:" => usearch::Index::new(&usearch::IndexOptions::default()).unwrap(),
+            _ => {
+                let index = usearch::Index::new(&usearch::IndexOptions::default()).unwrap();
+                index.load(&index_path).unwrap();
+                index
+            }
+        };
+
+        Self {
+            conn: conn.into(),
+            text_index: index,
+        }
     }
 
     pub fn add_document(&self, doc_name: &str) -> Result<Document> {
@@ -78,14 +101,18 @@ impl Store {
             embedding,
         }: &operation::Chunk,
     ) -> Result<Chunk> {
-        sqlite::insert_chunk(
+        let embedding_vec = embedding.to_vec1()?;
+        let chunk = sqlite::insert_chunk(
             &mut self.conn.lock().unwrap(),
             *full_doc_id,
             *chunk_index,
             *tokens,
             content,
-            &embedding.to_vec1()?,
-        )
+            &embedding_vec,
+        )?;
+        self.text_index
+            .add(chunk.id.try_into().unwrap(), &embedding_vec)?;
+        Ok(chunk)
     }
 
     pub fn add_entity(&self, entity: &operation::Entity, chunk: &Chunk) -> Result<Entity> {
@@ -111,6 +138,24 @@ impl Store {
             *target_id,
             &relation.relationship,
         )
+    }
+
+    pub fn vector_search(&self, query: &Vec<f32>, top_k: usize) -> Result<Vec<(u64, f32)>> {
+        self.text_index
+            .search(&query, top_k)
+            .map(|x| {
+                x.keys
+                    .iter()
+                    .zip(x.distances.iter())
+                    .map(|(x, y)| (*x, *y))
+                    .collect()
+            })
+            .with_context(|| "vector search failed")
+    }
+
+    pub fn find_chunk_by_id(&self, id: ChunkId) -> Result<Chunk> {
+        let mut conn = self.conn.lock().unwrap();
+        sqlite::query_chunk_by_id(&mut conn, id)
     }
 
     pub fn find_entities_by_names(&self, names: &Vec<String>) -> Result<Vec<Entity>> {
