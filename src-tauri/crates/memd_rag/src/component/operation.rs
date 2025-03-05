@@ -6,6 +6,7 @@
 
 use candle_core::Tensor;
 use candle_transformers::models::bert::BertModel;
+use petgraph::graph::UnGraph;
 use tokenizers::Tokenizer;
 
 use anyhow::Result;
@@ -148,12 +149,25 @@ pub async fn graph_search(
     entities: &Vec<super::database::Entity>,
     relations: &Vec<super::database::Relation>,
 ) -> Result<Vec<i64>> {
-    let mut all_entity_ids: Vec<i64> = entities.iter().map(|x| x.id).collect();
-    let all_entity_ids_in_relation: Vec<i64> = relations
+    let edges = relations
         .iter()
-        .flat_map(|x| vec![x.source_id, x.target_id])
-        .collect();
-    all_entity_ids.extend(all_entity_ids_in_relation);
-    all_entity_ids.dedup();
-    Ok(all_entity_ids)
+        .map(|x| (x.source_id as u32, x.target_id as u32))
+        .collect::<Vec<_>>();
+    let g = UnGraph::<u32, ()>::from_edges(&edges);
+    println!("{:?}", g);
+    let output_ranks = petgraph::algo::page_rank(&g, 0.7, 10);
+    println!("{:?}", output_ranks);
+    // get the argmax index of the output ranks
+    let mut output_ranks = output_ranks
+        .iter()
+        .enumerate()
+        .map(|(i, x)| (i as i64, *x)) // TODO: this should be replaced... bad api of petgraph lib
+        .collect::<Vec<_>>();
+
+    output_ranks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    Ok(output_ranks
+        .iter()
+        .filter(|x| x.0 != 0) // TODO: remove this hack
+        .map(|x| x.0)
+        .collect())
 }

@@ -1,6 +1,23 @@
 pub use crate::component;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::info;
+
+#[derive(Debug, Clone)]
+pub struct MemdAgentOption {
+    pub chunk_size: usize,
+    pub chunk_overlap: usize,
+    pub top_k: usize,
+}
+
+impl Default for MemdAgentOption {
+    fn default() -> Self {
+        Self {
+            chunk_size: 20,
+            chunk_overlap: 2,
+            top_k: 1,
+        }
+    }
+}
 
 pub async fn insert(
     doc: &component::operation::Document,
@@ -70,18 +87,45 @@ async fn test_insert() {
     insert(&doc, &mut local_comps).await.unwrap();
 }
 
-pub async fn query(question: &str, local_comps: &mut component::LocalComponent) -> Result<String> {
+pub async fn query(
+    question: &str,
+    local_comps: &mut component::LocalComponent,
+    opt: &MemdAgentOption,
+) -> Result<String> {
     let entities = local_comps.llm.extract_entities(question)?;
-    let matching_entities = local_comps.store.find_entities_by_names(&entities)?;
+    let entities_embedding: Vec<Vec<f32>> = entities
+        .iter()
+        .flat_map(|x| {
+            component::bert::encode_single_sentence(
+                x,
+                &mut local_comps.tokenizer,
+                &local_comps.bert,
+            )
+            .and_then(|x| x.to_vec1::<f32>().with_context(|| "encoding failed"))
+        })
+        .collect();
+    let matching_entities = local_comps
+        .store
+        .find_entitiy_ids_by_embeddings(&entities_embedding, opt.top_k)?;
+    let matching_entity_ids = matching_entities
+        .iter()
+        .map(|x| x.0.try_into().unwrap())
+        .collect::<Vec<_>>();
+    let enriched_entities = local_comps
+        .store
+        .find_entities_by_ids(&matching_entity_ids)?;
+
     let relations = local_comps
         .store
-        .find_relation_by_entities(&matching_entities)?;
-    let all_entity_ids = component::operation::graph_search(&matching_entities, &relations).await?;
+        .find_relation_by_entities(&enriched_entities)?;
+
+    let all_entity_ids = component::operation::graph_search(&enriched_entities, &relations).await?;
     let all_entities = local_comps.store.find_entities_by_ids(&all_entity_ids)?;
     let chunks = local_comps
         .store
         .find_chunks_by_entity_ids(&all_entity_ids)?;
     let texts: Vec<String> = chunks.iter().map(|chunk| chunk.content.clone()).collect();
+    let enriched_relations = local_comps.store.enrich_relations(&relations)?;
     let prompt = component::llm::build_complete_prompt(
         question,
         if all_entities.len() > 0 {
@@ -89,7 +133,7 @@ pub async fn query(question: &str, local_comps: &mut component::LocalComponent) 
         } else {
             ""
         },
-        &vec![],
+        &enriched_relations,
         &texts,
     );
     local_comps.llm.complete(&prompt)
@@ -105,7 +149,9 @@ async fn test_query() {
     let mut local_comps = component::LocalComponent::default();
     insert(&doc, &mut local_comps).await.unwrap();
     let question = "What is the capital of China?";
-    let answer = query(question, &mut local_comps).await.unwrap();
+    let answer = query(question, &mut local_comps, &MemdAgentOption::default())
+        .await
+        .unwrap();
     println!("answer: {}", answer);
 }
 

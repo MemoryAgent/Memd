@@ -10,7 +10,7 @@ mod read_agent;
 
 pub enum RAGMethods {
     HippoRAG,
-    MemdAgent,
+    MemdAgent(memd_agent::MemdAgentOption),
     Raptor,
     ReadAgent,
     NoRAG,
@@ -24,11 +24,11 @@ pub async fn insert(
 ) -> Result<()> {
     match method {
         RAGMethods::HippoRAG => todo!(),
-        RAGMethods::MemdAgent => memd_agent::insert(doc, local_comps).await,
+        RAGMethods::MemdAgent(_) => memd_agent::insert(doc, local_comps).await,
         RAGMethods::Raptor => todo!(),
         RAGMethods::ReadAgent => todo!(),
         RAGMethods::NoRAG => no_rag::insert(doc, local_comps),
-        RAGMethods::NaiveRAG(opt) => todo!(),
+        RAGMethods::NaiveRAG(_) => todo!(),
     }
 }
 
@@ -39,11 +39,11 @@ pub async fn query(
 ) -> Result<String> {
     match method {
         RAGMethods::HippoRAG => todo!(),
-        RAGMethods::MemdAgent => memd_agent::query(question, local_comps).await,
+        RAGMethods::MemdAgent(opt) => memd_agent::query(question, local_comps, &opt).await,
         RAGMethods::Raptor => todo!(),
         RAGMethods::ReadAgent => todo!(),
         RAGMethods::NoRAG => no_rag::query(question, local_comps),
-        RAGMethods::NaiveRAG(opt) => todo!(),
+        RAGMethods::NaiveRAG(opt) => naive_rag::query(question, local_comps, &opt).await,
     }
 }
 

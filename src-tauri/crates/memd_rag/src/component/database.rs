@@ -48,6 +48,7 @@ pub struct Relation {
 pub struct Store {
     conn: Mutex<Connection>,
     text_index: usearch::Index,
+    node_index: usearch::Index,
 }
 
 impl Default for Store {
@@ -60,30 +61,47 @@ impl Default for Store {
         })
         .unwrap();
         text_index.reserve(100).unwrap();
+        let node_index = usearch::Index::new(&usearch::IndexOptions {
+            dimensions: 384,
+            ..Default::default()
+        })
+        .unwrap();
+        node_index.reserve(100).unwrap();
         Self {
             conn: conn.into(),
             text_index,
+            node_index,
         }
     }
 }
 
 impl Store {
-    pub fn new(db_path: &str, index_path: &str) -> Self {
+    pub fn new(db_path: &str, text_index_path: &str, node_index_path: &str) -> Self {
         let mut conn = Connection::open(db_path).unwrap();
         run_migrations(&mut conn).unwrap();
 
-        let index = match db_path {
+        let text_index = match db_path {
             ":memory:" => usearch::Index::new(&usearch::IndexOptions::default()).unwrap(),
             _ => {
                 let index = usearch::Index::new(&usearch::IndexOptions::default()).unwrap();
-                index.load(&index_path).unwrap();
+                index.load(&text_index_path).unwrap();
+                index
+            }
+        };
+
+        let node_index = match db_path {
+            ":memory:" => usearch::Index::new(&usearch::IndexOptions::default()).unwrap(),
+            _ => {
+                let index = usearch::Index::new(&usearch::IndexOptions::default()).unwrap();
+                index.load(&node_index_path).unwrap();
                 index
             }
         };
 
         Self {
             conn: conn.into(),
-            text_index: index,
+            text_index,
+            node_index,
         }
     }
 
@@ -116,12 +134,12 @@ impl Store {
     }
 
     pub fn add_entity(&self, entity: &operation::Entity, chunk: &Chunk) -> Result<Entity> {
-        let entity = sqlite::insert_entity(
-            &mut self.conn.lock().unwrap(),
-            &entity.name,
-            &entity.embedding.to_vec1()?,
-        )?;
+        let embedding_vec = entity.embedding.to_vec1()?;
+        let entity =
+            sqlite::insert_entity(&mut self.conn.lock().unwrap(), &entity.name, &embedding_vec)?;
         sqlite::insert_entity_chunk(&mut self.conn.lock().unwrap(), entity.id, chunk.id)?;
+        self.node_index
+            .add(entity.id.try_into().unwrap(), &embedding_vec)?;
         Ok(entity)
     }
 
@@ -171,6 +189,40 @@ impl Store {
         Ok(entities)
     }
 
+    pub fn find_entity_ids_by_embedding(
+        &self,
+        embedding: &Vec<f32>,
+        top_k: usize,
+    ) -> Result<Vec<(u64, f32)>> {
+        self.node_index
+            .search(&embedding, top_k)
+            .map(|x| {
+                x.keys
+                    .iter()
+                    .zip(x.distances.iter())
+                    .map(|(x, y)| (*x, *y))
+                    .collect()
+            })
+            .with_context(|| "vector search failed")
+    }
+
+    pub fn find_entitiy_ids_by_embeddings(
+        &self,
+        embeddings: &Vec<Vec<f32>>,
+        top_k: usize,
+    ) -> Result<Vec<(u64, f32)>> {
+        let mut results = Vec::new();
+        for e in embeddings
+            .iter()
+            .map(|embedding| self.find_entity_ids_by_embedding(embedding, top_k))
+        {
+            if let Ok(v) = e {
+                results.extend(v);
+            }
+        }
+        Ok(results)
+    }
+
     pub fn find_relation_by_entities(&self, entities: &Vec<Entity>) -> Result<Vec<Relation>> {
         let mut conn = self.conn.lock().unwrap();
         let vn = entities
@@ -178,6 +230,24 @@ impl Store {
             .flat_map(|entity| sqlite::find_relation_by_entity_ids(&mut conn, entity.id).unwrap())
             .collect();
         Ok(vn)
+    }
+
+    pub fn enrich_relation(&self, relations: &Relation) -> Result<operation::Relation> {
+        let mut conn = self.conn.lock().unwrap();
+        let source_entities = sqlite::find_entity_by_id(&mut conn, relations.source_id)?;
+        let target_entities = sqlite::find_entity_by_id(&mut conn, relations.target_id)?;
+        Ok(operation::Relation {
+            source_name: source_entities.name,
+            target_name: target_entities.name,
+            relationship: relations.relationship.clone(),
+        })
+    }
+
+    pub fn enrich_relations(&self, relations: &Vec<Relation>) -> Result<Vec<operation::Relation>> {
+        relations
+            .iter()
+            .map(|relation| self.enrich_relation(relation))
+            .collect()
     }
 
     pub fn find_entities_by_ids(&self, ids: &Vec<EntityId>) -> Result<Vec<Entity>> {

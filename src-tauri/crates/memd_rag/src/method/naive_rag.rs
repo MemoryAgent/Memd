@@ -29,10 +29,10 @@ pub async fn insert(
     Ok(())
 }
 
-fn retrieve(
+pub fn retrieve(
     question: &str,
     local_comps: &mut component::LocalComponent,
-    opt: &NaiveRAGOption,
+    top_k: usize,
 ) -> Result<Vec<Chunk>> {
     let question_embedding = component::bert::encode_single_sentence(
         question,
@@ -42,7 +42,7 @@ fn retrieve(
 
     let search_results = local_comps
         .store
-        .vector_search(&question_embedding.to_vec1()?, opt.top_k)?;
+        .vector_search(&question_embedding.to_vec1()?, top_k)?;
 
     search_results
         .iter()
@@ -73,7 +73,7 @@ async fn test_retrieve() {
 
     insert(&doc, &mut local_comps, &opt).await.unwrap();
 
-    let chunks = retrieve(question, &mut local_comps, &opt).unwrap();
+    let chunks = retrieve(question, &mut local_comps, opt.top_k).unwrap();
 
     println!("{:?}", chunks);
 }
@@ -98,7 +98,7 @@ pub async fn query(
     local_comps: &mut component::LocalComponent,
     opt: &NaiveRAGOption,
 ) -> Result<String> {
-    let chunks = retrieve(question, local_comps, opt)?;
+    let chunks = retrieve(question, local_comps, opt.top_k)?;
     let prompt = build_rag_prompt(chunks, question);
     let answer = local_comps.llm.complete(&prompt)?;
     Ok(answer)
