@@ -3,6 +3,7 @@ import json
 import time
 import yaml
 
+
 def check_file_exists(save_file, total_len):
     if os.path.exists(
         save_file,
@@ -108,11 +109,9 @@ def generate_message(
 
 def extract_multi_turn_conversation(multi_turn_message, turn_number=3):
     message = []
-    for turn in multi_turn_message:
-        
-        role = turn["role"]
+    for turn in multi_turn_message[:turn_number]:
         content = turn["content"]
-        message.append({"role": role, "content": content})
+        message.append(content)
     return message
 
 
@@ -131,7 +130,7 @@ def load_config(config_file):
 def extract_multi_turn_message(turns_data, inter_turns):
     if inter_turns > 0:
         multi_turn_message = []
-        for turn_data in turns_data:
+        for turn_data in turns_data[:inter_turns]:
             multi_turn_message.extend(turn_data["conversation"])
         return (
             extract_multi_turn_conversation(multi_turn_message, inter_turns),

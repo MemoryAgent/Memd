@@ -38,6 +38,11 @@ class RemoteState(Enum):
 # Query --- the benchmark queries about the result
 #   via network -- POST /query
 #                   200 - OK
+#
+# Chat --- the benchmark simply chat with the model
+#   via network -- POST /chat
+#                  200 - OK
+#
 # Close --- the benchmark informs the model to stop testing
 #   via network --- GET /close
 #
@@ -66,6 +71,12 @@ def rm_store(rm: RemoteModel, corpus: dict[int, dict[str, str]]) -> bool:
 def rm_query(rm: RemoteModel, query: str) -> str:
     assert rm.state == RemoteState.OPEN
     resp = requests.post(f"{rm.url}/query", query)
+    return resp.content.decode("utf-8")
+
+
+def rm_chat(rm: RemoteModel, prompt: str) -> str:
+    assert rm.state == RemoteState.OPEN
+    resp = requests.post(f"{rm.url}/chat", prompt)
     return resp.content.decode("utf-8")
 
 

@@ -1,7 +1,8 @@
 import logging
 
 from beir.logging import LoggingHandler
-from bench_beir import _bench_on_dataset
+from bench_beir import bench_on_scifact
+from bench_prefeval import bench_prefeval
 from model import RemoteModel
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, CliApp
@@ -38,7 +39,9 @@ def get_config() -> BenchConfig:
 def bench_dispatcher(bench_target: BenchmarkTarget, remote_model: RemoteModel):
     match bench_target:
         case BenchmarkTarget.BEIR:
-            return
+            return bench_on_scifact(remote_model)
+        case BenchmarkTarget.PERSONA:
+            return bench_prefeval(remote_model)
 
 
 def main():
@@ -50,6 +53,7 @@ def main():
         handlers=[LoggingHandler()],
     )
     remote_model = RemoteModel(url=config.app_endpoint)
+    print(bench_dispatcher(remote_model))
 
 
 if __name__ == "__main__":

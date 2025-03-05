@@ -1,10 +1,7 @@
 import json
-import os
-import sys
 from pydantic import BaseModel, Field
 
 from prefeval.utils.common_utils import extract_multi_turn_message
-from prefeval.utils.explicit_utils import create_user_pref_message
 from prefeval.utils.utils_mcq import (
     get_question_prompt_mcq,
 )
@@ -39,8 +36,6 @@ class PrefevalOptions(BaseModel):
 
     task: Task
 
-    pref_type: ImplicitPrefType
-
     pref_form: PrefForm
 
     system_prompt: str = Field("You are a helpful assistant")
@@ -57,22 +52,22 @@ def load_mcq_data(dataset_path: str, topic: str):
         return json.load(f)
 
 
-def explicit_mode(opt: PrefevalOptions, turns_data):
-    topic_data = load_mcq_data(dataset_path=opt.dataset_dir, topic=opt.topic)
-    multi_inter_message, multi_turn_message = extract_multi_turn_message(
+def explicit_mode(opt: PrefevalOptions, turns_data, mcq_data):
+    multi_inter_message, _ = extract_multi_turn_message(
         turns_data=turns_data, inter_turns=opt.inter_turns
     )
-    for task_id, task in enumerate(topic_data):
+    prompts = []
+    for task_id, task in enumerate(mcq_data):
         preference = task["preference"]
-        prompt = get_question_prompt_mcq(
-            preference=preference,
-            options=task["classification_task_options"],
-            pref_generation="",
-            question=task["question"],
-            multi_inter_message=multi_inter_message,
-            turn_number=opt.inter_turns,
+        prompts.append(
+            get_question_prompt_mcq(
+                preference=preference,
+                options=task["classification_task_options"],
+                question=task["question"],
+                multi_inter_message=multi_inter_message,
+            )
         )
-        print(f"{task_id} is {prompt}")
+    return prompts
 
 
 def implicit_mode():
@@ -84,10 +79,9 @@ def load_dialogue_data():
     pass
 
 
-def bench_prefeval(opt: PrefevalOptions):
+def generate_prompt_sequences(opt: PrefevalOptions):
     if opt.task != Task.ZERO_SHOT:
-        raise RuntimeError("not implemented.")
-    if opt.pref_type != PrefForm.EXPLICIT:
         raise RuntimeError("not implemented.")
     turns_data = load_turns_data(dataset_dir=opt.dataset_dir)
     mcq_data = load_mcq_data(dataset_path=opt.dataset_dir, topic=opt.topic)
+    return explicit_mode(opt, turns_data, mcq_data)

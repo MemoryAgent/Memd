@@ -71,5 +71,10 @@ def _bench_on_dataset(
     return _evaluate_queries(rm=rm, corpus=corpus, queries=queries, qrel=qrels)
 
 
-def bench_on_scifact():
-    pass
+def bench_on_scifact(rm: RemoteModel):
+    _bench_on_dataset(
+        dataset_name="scifact",
+        dataset_path="./datasets",
+        rm=rm,
+        download_if_missing=True,
+    )
