@@ -1,3 +1,4 @@
+from typing import Optional
 import requests
 
 from enum import Enum
@@ -59,13 +60,19 @@ def rm_open(rm: RemoteModel) -> bool:
     return False
 
 
-def rm_store(rm: RemoteModel, corpus: dict[int, dict[str, str]]) -> bool:
+class StorePayload(BaseModel):
+    title: Optional[str]
+    content: str
+
+
+def rm_store(rm: RemoteModel, payload: StorePayload) -> bool:
     assert rm.state == RemoteState.OPEN
-    texts = [x["text"] for x in corpus.values()]
-    resp = requests.post(f"{rm.url}/store", json=texts)
+    resp = requests.post(f"{rm.url}/store", json=payload.model_dump())
     if resp.content.decode("utf-8") == "added":
         return True
-    return False
+    print(f"model_dump_json {payload.model_dump_json()}, err {resp.content.decode()}")
+    assert False
+    
 
 
 def rm_query(rm: RemoteModel, query: str) -> str:

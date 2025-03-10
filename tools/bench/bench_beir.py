@@ -16,7 +16,7 @@ from pathlib import Path
 
 import logging
 
-from model import RemoteModel, rm_open, rm_query, rm_store, rm_close
+from model import RemoteModel, StorePayload, rm_open, rm_query, rm_store, rm_close
 
 
 def _download_beir_dataset(dataset: str = "sciface", path: str = "./datasets"):
@@ -35,10 +35,20 @@ def _load_beir_dataset(dataset_path: str, dataset_name: str, download_if_missing
     return corpus, queries, qrels
 
 
+def _dump_corpus(rm: RemoteModel, corpus: dict[int, dict[str, str]]) -> bool:
+    for x in corpus.values():
+        title = x.get("title", None)
+        content = x.get("text")
+        result = rm_store(rm, StorePayload(title=title, content=content))
+        if result is False:
+            return False
+    return True
+
+
 def _evaluate_queries(rm: RemoteModel, corpus: dict, queries: dict, qrel: dict):
     rm_open(rm)
 
-    rm_store(rm, corpus)
+    _dump_corpus(rm=rm, corpus=corpus)
     inverted_corpus = {v["text"]: k for (k, v) in corpus.items()}
     results = {}
 
@@ -77,4 +87,26 @@ def bench_on_scifact(rm: RemoteModel):
         dataset_path="./datasets",
         rm=rm,
         download_if_missing=True,
+    )
+
+
+def bench_on_quora(rm: RemoteModel):
+    pass
+
+
+def bench_on_hotpotqa(rm: RemoteModel):
+    pass
+
+
+def bench_on_narrativeqa(rm: RemoteModel):
+    pass
+
+
+def bench_on(rm: RemoteModel, bench_funcs: list):
+    return list(map(lambda x: x(rm), bench_funcs))
+
+
+def bench_on_all(rm: RemoteModel):
+    return bench_on(
+        rm, [bench_on_scifact, bench_on_quora, bench_on_hotpotqa, bench_on_narrativeqa]
     )
