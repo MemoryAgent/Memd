@@ -7,6 +7,7 @@
 use candle_core::Tensor;
 use candle_transformers::models::bert::BertModel;
 use petgraph::graph::UnGraph;
+use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
 use anyhow::Result;
@@ -16,7 +17,7 @@ use super::{
     llm::Llm,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub name: String,
     pub content: String,
@@ -144,10 +145,10 @@ pub async fn chunk_extract_relation(
     llm.extract_relation(&content, &entity_names)
 }
 
-/// TODO: Implement graph search
 pub async fn graph_search(
     entities: &Vec<super::database::Entity>,
     relations: &Vec<super::database::Relation>,
+    ranking_top_k: usize,
 ) -> Result<Vec<i64>> {
     let edges = relations
         .iter()
@@ -165,9 +166,15 @@ pub async fn graph_search(
         .collect::<Vec<_>>();
 
     output_ranks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    Ok(output_ranks
+    let ranked_entities: Vec<i64> = output_ranks
         .iter()
         .filter(|x| x.0 != 0) // TODO: remove this hack
         .map(|x| x.0)
-        .collect())
+        .collect();
+    let ranked_entities = ranked_entities
+        .iter()
+        .take(ranking_top_k)
+        .map(|x| *x)
+        .collect();
+    Ok(ranked_entities)
 }

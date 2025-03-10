@@ -52,8 +52,7 @@ fn build_app(app: &mut tauri::App, config: &Config) -> Result<(), Box<dyn std::e
 async fn chat(question: &str, state: tauri::State<'_, RwLock<ServeMode>>) -> Result<String, ()> {
     let res = match &mut *state.write().await {
         ServeMode::LOCAL(local_state) => {
-            memd_rag::method::query(question, local_state, memd_rag::method::RAGMethods::NoRAG)
-                .await
+            memd_rag::method::chat(question, local_state, memd_rag::method::RAGMethods::NoRAG).await
         }
         ServeMode::REMOTE(remote_state) => online::chat_remote(question, remote_state).await,
     };

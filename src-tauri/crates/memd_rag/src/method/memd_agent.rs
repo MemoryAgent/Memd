@@ -2,11 +2,14 @@ pub use crate::component;
 use anyhow::{Context, Result};
 use tracing::info;
 
+use super::QueryResults;
+
 #[derive(Debug, Clone)]
 pub struct MemdAgentOption {
     pub chunk_size: usize,
     pub chunk_overlap: usize,
-    pub top_k: usize,
+    pub retrieve_top_k: usize,
+    pub ranking_top_k: usize,
 }
 
 impl Default for MemdAgentOption {
@@ -14,7 +17,8 @@ impl Default for MemdAgentOption {
         Self {
             chunk_size: 20,
             chunk_overlap: 2,
-            top_k: 1,
+            retrieve_top_k: 1,
+            ranking_top_k: 1,
         }
     }
 }
@@ -88,6 +92,14 @@ async fn test_insert() {
 }
 
 pub async fn query(
+    query: &str,
+    local_comps: &mut component::LocalComponent,
+    opt: &MemdAgentOption,
+) -> Result<QueryResults> {
+    Ok(QueryResults(vec![]))
+}
+
+pub async fn chat(
     question: &str,
     local_comps: &mut component::LocalComponent,
     opt: &MemdAgentOption,
@@ -106,7 +118,7 @@ pub async fn query(
         .collect();
     let matching_entities = local_comps
         .store
-        .find_entitiy_ids_by_embeddings(&entities_embedding, opt.top_k)?;
+        .find_entitiy_ids_by_embeddings(&entities_embedding, opt.retrieve_top_k)?;
     let matching_entity_ids = matching_entities
         .iter()
         .map(|x| x.0.try_into().unwrap())
@@ -119,7 +131,9 @@ pub async fn query(
         .store
         .find_relation_by_entities(&enriched_entities)?;
 
-    let all_entity_ids = component::operation::graph_search(&enriched_entities, &relations).await?;
+    let all_entity_ids =
+        component::operation::graph_search(&enriched_entities, &relations, opt.ranking_top_k)
+            .await?;
     let all_entities = local_comps.store.find_entities_by_ids(&all_entity_ids)?;
     let chunks = local_comps
         .store
@@ -149,7 +163,7 @@ async fn test_query() {
     let mut local_comps = component::LocalComponent::default();
     insert(&doc, &mut local_comps).await.unwrap();
     let question = "What is the capital of China?";
-    let answer = query(question, &mut local_comps, &MemdAgentOption::default())
+    let answer = chat(question, &mut local_comps, &MemdAgentOption::default())
         .await
         .unwrap();
     println!("answer: {}", answer);

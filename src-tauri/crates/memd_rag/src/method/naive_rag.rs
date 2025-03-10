@@ -1,4 +1,7 @@
-use super::component::{self, database::Chunk, operation};
+use super::{
+    component::{self, database::Chunk, operation},
+    QueryResults,
+};
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
@@ -78,6 +81,14 @@ async fn test_retrieve() {
     println!("{:?}", chunks);
 }
 
+pub fn query(
+    query: &str,
+    local_comps: &mut component::LocalComponent,
+    opt: &NaiveRAGOption,
+) -> Result<QueryResults> {
+    Ok(QueryResults(vec![]))
+}
+
 fn build_rag_prompt(chunks: Vec<Chunk>, question: &str) -> String {
     format!(
         "You have following context information:
@@ -93,7 +104,7 @@ fn build_rag_prompt(chunks: Vec<Chunk>, question: &str) -> String {
     )
 }
 
-pub async fn query(
+pub async fn chat(
     question: &str,
     local_comps: &mut component::LocalComponent,
     opt: &NaiveRAGOption,

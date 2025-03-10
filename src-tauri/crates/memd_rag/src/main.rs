@@ -4,14 +4,38 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use axum::{extract::State, routing::post, Json, Router};
-use memd_rag::component::{operation::Document, LocalComponent};
+use axum::{
+    debug_handler, extract::State, http::StatusCode, response::IntoResponse, routing::post, Json,
+    Router,
+};
+use memd_rag::{
+    component::{operation::Document, LocalComponent},
+    method::QueryResults,
+};
 use serde::{Deserialize, Serialize};
 use tokio::signal::{unix::signal, unix::SignalKind};
 use tracing::info;
 
-#[derive(Deserialize)]
-struct StorePayload(String);
+/// Wrapper for error handling
+/// Taken from https://github.com/tokio-rs/axum/blob/main/examples/anyhow-error-response/src/main.rs
+struct AppError(anyhow::Error);
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> axum::response::Response {
+        (StatusCode::INTERNAL_SERVER_ERROR, self.0.to_string()).into_response()
+    }
+}
+
+impl<E> From<E> for AppError
+where
+    E: Into<anyhow::Error>,
+{
+    fn from(err: E) -> Self {
+        Self(err.into())
+    }
+}
+
+type Result<T> = std::result::Result<T, AppError>;
 
 /// [`Timer`] is used to record the processing time of this program.
 #[derive(Default)]
@@ -112,44 +136,67 @@ impl DerefMut for AppState {
     }
 }
 
-async fn bench_open(State(mut bs_state): State<AppState>) -> &'static str {
+async fn open_benchmark_api(State(mut bs_state): State<AppState>) -> &'static str {
     bs_state.metrics.reset();
     "happy for challenge."
 }
 
-async fn bench_store(
+#[derive(Deserialize)]
+struct StorePayload {
+    title: Option<String>,
+    content: String,
+}
+
+async fn store_api(
     State(mut bs_state): State<AppState>,
     Json(text): Json<StorePayload>,
-) -> &'static str {
+) -> Result<&'static str> {
     bs_state.metrics.start_embedding();
     memd_rag::method::insert(
         &Document {
-            name: "dialogue".to_string(),
-            content: text.0,
+            name: match text.title {
+                Some(title) => title,
+                None => "".to_string(),
+            },
+            content: text.content,
         },
         &mut bs_state.local_comps,
         memd_rag::method::RAGMethods::NoRAG,
     )
-    .await
-    .unwrap();
+    .await?;
     bs_state.metrics.end_embedding();
-    "added"
+    Ok("added")
 }
 
-async fn bench_query(State(mut bs_state): State<AppState>, query: String) -> String {
+#[debug_handler]
+/// query is a intermediate step of RAG. It gives the relating document with confidence score.
+async fn query_api(
+    State(mut bs_state): State<AppState>,
+    query: String,
+) -> Result<Json<QueryResults>> {
     bs_state.metrics.start_query();
     let answer = memd_rag::method::query(
         &query,
         &mut bs_state.local_comps,
         memd_rag::method::RAGMethods::NoRAG,
     )
-    .await
-    .unwrap_or("not found".to_string());
+    .await?;
     bs_state.metrics.end_query();
-    answer
+    Ok(Json(answer))
 }
 
-async fn bench_close(State(bs_state): State<AppState>) -> Json<MetricData> {
+async fn chat_api(State(mut bs_state): State<AppState>, question: String) -> Result<String> {
+    let answer = memd_rag::method::chat(
+        &question,
+        &mut bs_state.local_comps,
+        memd_rag::method::RAGMethods::NoRAG,
+    )
+    .await?;
+
+    Ok(answer.to_string())
+}
+
+async fn close_benchmark_api(State(bs_state): State<AppState>) -> Json<MetricData> {
     Json(bs_state.metrics.report())
 }
 
@@ -185,10 +232,11 @@ async fn main() {
     let app_state = AppState(Arc::new(app));
 
     let router = Router::new()
-        .route("/open", post(bench_open))
-        .route("/store", post(bench_store))
-        .route("/query", post(bench_query))
-        .route("/close", post(bench_close))
+        .route("/open", post(open_benchmark_api))
+        .route("/store", post(store_api))
+        .route("/query", post(query_api))
+        .route("/chat", post(chat_api))
+        .route("/close", post(close_benchmark_api))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("localhost:3000")

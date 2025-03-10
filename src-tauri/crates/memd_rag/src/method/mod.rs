@@ -1,5 +1,6 @@
 pub use crate::component;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 mod hippo_rag;
 mod memd_agent;
@@ -32,18 +33,46 @@ pub async fn insert(
     }
 }
 
+#[derive(Serialize, Debug, Clone, Deserialize)]
+pub struct QueryResult {
+    pub document: component::operation::Document,
+    pub conf_score: f64,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct QueryResults(pub Vec<QueryResult>);
+
 pub async fn query(
     question: &str,
     local_comps: &mut component::LocalComponent,
     method: RAGMethods,
-) -> Result<String> {
+) -> Result<QueryResults> {
     match method {
         RAGMethods::HippoRAG => todo!(),
         RAGMethods::MemdAgent(opt) => memd_agent::query(question, local_comps, &opt).await,
         RAGMethods::Raptor => todo!(),
         RAGMethods::ReadAgent => todo!(),
         RAGMethods::NoRAG => no_rag::query(question, local_comps),
-        RAGMethods::NaiveRAG(opt) => naive_rag::query(question, local_comps, &opt).await,
+        RAGMethods::NaiveRAG(opt) => naive_rag::query(question, local_comps, &opt),
+    }
+}
+
+pub async fn chat(
+    question: &str,
+    local_comps: &mut component::LocalComponent,
+    method: RAGMethods,
+) -> Result<String> {
+    match method {
+        RAGMethods::HippoRAG => todo!(),
+        RAGMethods::MemdAgent(memd_agent_option) => {
+            memd_agent::chat(question, local_comps, &memd_agent_option).await
+        }
+        RAGMethods::Raptor => todo!(),
+        RAGMethods::ReadAgent => todo!(),
+        RAGMethods::NoRAG => no_rag::chat(question, local_comps),
+        RAGMethods::NaiveRAG(naive_ragoption) => {
+            naive_rag::chat(question, local_comps, &naive_ragoption).await
+        }
     }
 }
 
