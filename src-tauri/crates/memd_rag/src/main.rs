@@ -4,10 +4,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use axum::{
-    debug_handler, extract::State, http::StatusCode, response::IntoResponse, routing::post, Json,
-    Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 use memd_rag::{
     component::{operation::Document, LocalComponent},
     method::QueryResults,
@@ -168,7 +165,6 @@ async fn store_api(
     Ok("added")
 }
 
-#[debug_handler]
 /// query is a intermediate step of RAG. It gives the relating document with confidence score.
 async fn query_api(
     State(mut bs_state): State<AppState>,

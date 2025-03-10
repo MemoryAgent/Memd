@@ -27,7 +27,7 @@ pub async fn insert(
     doc: &component::operation::Document,
     local_comps: &mut component::LocalComponent,
 ) -> Result<()> {
-    let stored_doc = local_comps.store.add_document(&doc.name)?;
+    let stored_doc = local_comps.store.add_document(&doc)?;
     let chunks = component::operation::chunk_document(
         doc,
         stored_doc.id,

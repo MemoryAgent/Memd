@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
 
-use super::database::{Chunk, Document, Entity, Relation};
+use super::{
+    database::{Chunk, Document, Entity, Relation},
+    operation,
+};
 
 refinery::embed_migrations!("migration");
 
@@ -16,28 +19,33 @@ fn test_in_mem_migration() {
     run_migrations(&mut conn).unwrap();
 }
 
-pub(crate) fn insert_document(conn: &mut Connection, doc_name: &str) -> Result<Document> {
+pub(crate) fn insert_document(
+    conn: &mut Connection,
+    operation::Document { name, content }: &operation::Document,
+) -> Result<Document> {
     conn.query_row(
-        "INSERT INTO document (doc_name) VALUES (?) RETURNING *",
-        &[doc_name],
+        "INSERT INTO document (doc_name, content) VALUES (?) RETURNING ()",
+        &[name, content],
         |row| {
             Ok(Document {
                 id: row.get(0)?,
                 doc_name: row.get(1)?,
+                content: row.get(3)?,
             })
         },
     )
-    .with_context(|| format!("Failed to insert document {}", doc_name))
+    .with_context(|| format!("Failed to insert document {}", name))
 }
 
 pub(crate) fn query_document_by_id(conn: &mut Connection, doc_id: i64) -> Result<Document> {
     conn.query_row(
-        "SELECT id, doc_name FROM document WHERE id = ?",
+        "SELECT id, doc_name, content FROM document WHERE id = ?",
         [doc_id],
         |row| {
             Ok(Document {
                 id: row.get(0)?,
                 doc_name: row.get(1)?,
+                content: row.get(2)?,
             })
         },
     )
@@ -48,7 +56,14 @@ pub(crate) fn query_document_by_id(conn: &mut Connection, doc_id: i64) -> Result
 fn test_insert_query_document() {
     let mut conn = Connection::open_in_memory().unwrap();
     run_migrations(&mut conn).unwrap();
-    let doc = insert_document(&mut conn, "test").unwrap();
+    let doc = insert_document(
+        &mut conn,
+        &operation::Document {
+            name: "test".to_string(),
+            content: "test_document_content".to_string(),
+        },
+    )
+    .unwrap();
     assert_eq!(doc.doc_name, "test");
 }
 
@@ -98,7 +113,14 @@ pub(crate) fn insert_chunk(
 fn test_insert_query_chunk() {
     let mut conn = Connection::open_in_memory().unwrap();
     run_migrations(&mut conn).unwrap();
-    let doc = insert_document(&mut conn, "test").unwrap();
+    let doc = insert_document(
+        &mut conn,
+        &operation::Document {
+            name: "test".to_string(),
+            content: "test_content".to_string(),
+        },
+    )
+    .unwrap();
     let chunk = insert_chunk(&mut conn, doc.id, 2, 3, "test", &vec![1.0, 2.0, 3.0]).unwrap();
     assert_eq!(chunk.content, "test");
     assert_eq!(chunk.content_vector, vec![1.0, 2.0, 3.0]);
@@ -157,11 +179,12 @@ pub(crate) fn insert_entity_chunk(
 }
 
 pub(crate) fn query_all_documents(conn: &mut Connection) -> Result<Vec<Document>> {
-    let mut stmt = conn.prepare("SELECT id, doc_name FROM document")?;
+    let mut stmt = conn.prepare("SELECT id, doc_name, content FROM document")?;
     let doc_iter = stmt.query_map([], |row| {
         Ok(Document {
             id: row.get(0)?,
             doc_name: row.get(1)?,
+            content: row.get(2)?,
         })
     })?;
     let mut res = Vec::new();

@@ -1,6 +1,7 @@
 CREATE TABLE document (
     id INTEGER PRIMARY KEY, -- https://www.sqlite.org/autoinc.html
     doc_name TEXT,
+    content TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

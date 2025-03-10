@@ -15,6 +15,7 @@ type DocumentId = i64;
 pub struct Document {
     pub id: DocumentId,
     pub doc_name: String,
+    pub content: String,
 }
 
 type ChunkId = i64;
@@ -105,8 +106,8 @@ impl Store {
         }
     }
 
-    pub fn add_document(&self, doc_name: &str) -> Result<Document> {
-        sqlite::insert_document(&mut self.conn.lock().unwrap(), doc_name)
+    pub fn add_document(&self, doc: &operation::Document) -> Result<Document> {
+        sqlite::insert_document(&mut self.conn.lock().unwrap(), &doc)
     }
 
     pub fn add_chunk(
