@@ -17,10 +17,13 @@ tokenizers = "0.21.0"
 safetensors = "0.5.2"
 candle-core = "0.8.2"
 candle-nn = "0.8.2"
-hf-hub = { version = "0.4.1", default-features = false, features = ["tokio", "rustls-tls", "ureq"] }
+hf-hub = { version = "0.4.1", default-features = false, features = [
+    "tokio",
+    "rustls-tls",
+    "ureq",
+] }
 
-# Web
-axum = { version = "0.8.1", features = ["macros"] }
+# Observability
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 

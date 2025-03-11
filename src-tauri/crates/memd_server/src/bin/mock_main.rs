@@ -6,7 +6,7 @@ async fn main() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
-    let router = memd_rag::controller::mock_router::make_router();
+    let router = memd_server::controller::mock_router::make_router();
 
     let listener = tokio::net::TcpListener::bind("localhost:3000")
         .await
@@ -15,7 +15,7 @@ async fn main() {
     info!("mock listening on {}", listener.local_addr().unwrap());
 
     axum::serve(listener, router)
-        .with_graceful_shutdown(memd_rag::controller::shutdown_signal())
+        .with_graceful_shutdown(memd_server::controller::shutdown_signal())
         .await
         .unwrap();
 }

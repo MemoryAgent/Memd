@@ -3004,7 +3004,6 @@ name = "memd_rag"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "axum",
  "candle-core",
  "candle-nn",
  "candle-transformers",
@@ -3022,6 +3021,21 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "usearch",
+]
+
+[[package]]
+name = "memd_server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "memd_rag",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

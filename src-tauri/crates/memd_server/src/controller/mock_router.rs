@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use super::{MetricData, Result, StorePayload};
-use crate::method::QueryResults;
 use axum::Json;
+use memd_rag::method::QueryResults;
 
 async fn open_benchmark_api() -> &'static str {
     "happy for challenge."

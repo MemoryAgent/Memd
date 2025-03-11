@@ -1,6 +1,6 @@
 use super::{AppState, MetricData, Result, StorePayload};
-use crate::{component::operation::Document, method::QueryResults};
 use axum::{extract::State, Json};
+use memd_rag::{component::operation::Document, method::QueryResults};
 
 async fn open_benchmark_api(State(mut bs_state): State<AppState>) -> &'static str {
     bs_state.metrics.reset();
@@ -12,7 +12,7 @@ async fn store_api(
     Json(text): Json<StorePayload>,
 ) -> Result<&'static str> {
     bs_state.metrics.start_embedding();
-    crate::method::insert(
+    memd_rag::method::insert(
         &Document {
             name: match text.title {
                 Some(title) => title,
@@ -21,7 +21,7 @@ async fn store_api(
             content: text.content,
         },
         &mut bs_state.local_comps,
-        crate::method::RAGMethods::NoRAG,
+        memd_rag::method::RAGMethods::NoRAG,
     )
     .await?;
     bs_state.metrics.end_embedding();
@@ -34,10 +34,10 @@ async fn query_api(
     query: String,
 ) -> Result<Json<QueryResults>> {
     bs_state.metrics.start_query();
-    let answer = crate::method::query(
+    let answer = memd_rag::method::query(
         &query,
         &mut bs_state.local_comps,
-        crate::method::RAGMethods::NoRAG,
+        memd_rag::method::RAGMethods::NoRAG,
     )
     .await?;
     bs_state.metrics.end_query();
@@ -45,10 +45,10 @@ async fn query_api(
 }
 
 async fn chat_api(State(mut bs_state): State<AppState>, question: String) -> Result<String> {
-    let answer = crate::method::chat(
+    let answer = memd_rag::method::chat(
         &question,
         &mut bs_state.local_comps,
-        crate::method::RAGMethods::NoRAG,
+        memd_rag::method::RAGMethods::NoRAG,
     )
     .await?;
 

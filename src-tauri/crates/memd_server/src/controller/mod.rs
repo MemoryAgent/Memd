@@ -4,7 +4,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::component::LocalComponent;
+use memd_rag::component::LocalComponent;
 use axum::{http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use tokio::signal::{unix::signal, unix::SignalKind};
