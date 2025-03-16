@@ -9,6 +9,7 @@ mAP: accuracy.
 time: embedding + query
 """
 
+from typing import Dict
 from beir import util  # type: ignore
 from beir.datasets.data_loader import GenericDataLoader  # type: ignore
 from beir.retrieval.evaluation import EvaluateRetrieval  # type: ignore
@@ -16,10 +17,11 @@ from pathlib import Path
 
 import logging
 
-from model import RemoteModel, StorePayload, rm_open, rm_query, rm_store, rm_close
+import client
+import config
 
 
-def _download_beir_dataset(dataset: str = "sciface", path: str = "./datasets"):
+def _download_beir_dataset(dataset: str = "scifact", path: str = "./datasets"):
     url = f"https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{dataset}.zip"
     return util.download_and_unzip(url, path)
 
@@ -35,41 +37,51 @@ def _load_beir_dataset(dataset_path: str, dataset_name: str, download_if_missing
     return corpus, queries, qrels
 
 
-def _dump_corpus(rm: RemoteModel, corpus: dict[int, dict[str, str]]) -> bool:
-    for x in corpus.values():
+def _dump_corpus(rm: client.RemoteModel, corpus: dict[int, dict[str, str]]) -> bool:
+    for i, x in enumerate(corpus.values()):
         title = x.get("title", None)
         content = x.get("text")
-        result = rm_store(rm, StorePayload(title=title, content=content))
+        result = client.rm_store(rm, client.StorePayload(title=title, content=content))
         if result is False:
             return False
     return True
 
 
-def _evaluate_queries(rm: RemoteModel, corpus: dict, queries: dict, qrel: dict):
-    rm_open(rm)
+def _evaluate_retrieves(
+    rm: client.RemoteModel, corpus: dict, queries: dict, qrel: dict
+):
+    client.rm_open(rm)
 
     _dump_corpus(rm=rm, corpus=corpus)
     inverted_corpus = {v["text"]: k for (k, v) in corpus.items()}
-    results = {}
+    results: Dict[str, Dict[str, float]] = {}
 
-    for qid, query in queries.items():
-        answer = rm_query(rm, query)
-        aid = inverted_corpus.get(answer, -1)
-        logging.info(
-            f"getting query {qid} answer digest {answer[:100]} in document {aid}"
-        )
-        results[f"{qid}"] = {f"{aid}": 100.0}  # TODO: return confidence
-    performance = rm_close(rm)
+    for i, (qid, query) in enumerate(queries.items()):
+        retrieved_docs = client.rm_query(rm, query)
+        for query_result in retrieved_docs:
+            aid = inverted_corpus.get(query_result.document.content, -1)
+            if aid == -1:
+                logging.warning(
+                    f"getting unrecognized document {query_result.document}"
+                )
+                continue
+            logging.info(
+                f"getting query {qid} answer digest {query_result.document.content[:100]} in document {aid}"
+            )
+            question_dict = results.setdefault(f"{qid}", {})
+            question_dict[f"{aid}"] = query_result.conf_score
+    performance = client.rm_close(rm)
+    # TODO: make this more explicit. currently use whole message from BEIR as the evaluated performance
     return (
-        EvaluateRetrieval.evaluate(qrels=qrel, results=results, k_values=[1]),
+        EvaluateRetrieval.evaluate(qrels=qrel, results=results, k_values=[5]),
         performance,
     )
 
 
-def _bench_on_dataset(
+def _bench_retrieval_on_dataset(
     dataset_name: str,
     dataset_path: str,
-    rm: RemoteModel,
+    rm: client.RemoteModel,
     download_if_missing=False,
 ):
     corpus, queries, qrels = _load_beir_dataset(
@@ -78,11 +90,12 @@ def _bench_on_dataset(
         download_if_missing=download_if_missing,
     )
 
-    return _evaluate_queries(rm=rm, corpus=corpus, queries=queries, qrel=qrels)
+    return _evaluate_retrieves(rm=rm, corpus=corpus, queries=queries, qrel=qrels)
 
 
-def bench_on_scifact(rm: RemoteModel):
-    _bench_on_dataset(
+# TODO: simplify these code.
+def bench_on_scifact(rm: client.RemoteModel):
+    return _bench_retrieval_on_dataset(
         dataset_name="scifact",
         dataset_path="./datasets",
         rm=rm,
@@ -90,23 +103,146 @@ def bench_on_scifact(rm: RemoteModel):
     )
 
 
-def bench_on_quora(rm: RemoteModel):
-    pass
-
-
-def bench_on_hotpotqa(rm: RemoteModel):
-    pass
-
-
-def bench_on_narrativeqa(rm: RemoteModel):
-    pass
-
-
-def bench_on(rm: RemoteModel, bench_funcs: list):
-    return list(map(lambda x: x(rm), bench_funcs))
-
-
-def bench_on_all(rm: RemoteModel):
-    return bench_on(
-        rm, [bench_on_scifact, bench_on_quora, bench_on_hotpotqa, bench_on_narrativeqa]
+def bench_on_quora(rm: client.RemoteModel):
+    return _bench_retrieval_on_dataset(
+        dataset_name="quora",
+        dataset_path="./datasets",
+        rm=rm,
+        download_if_missing=True,
     )
+
+
+def bench_on_hotpotqa(rm: client.RemoteModel):
+    return _bench_retrieval_on_dataset(
+        dataset_name="hotpotqa",
+        dataset_path="./datasets",
+        rm=rm,
+        download_if_missing=True,
+    )
+
+
+def bench_on_natural_questions(rm: client.RemoteModel):
+    return _bench_retrieval_on_dataset(
+        dataset_name="nq",
+        dataset_path="./datasets",
+        rm=rm,
+        download_if_missing=True,
+    )
+
+
+# TinyQA is a tiny subset of hotpotQA. It is used for testing, not a real benchmark, so it is
+# excluded from all.
+def bench_on_tinyqa(rm: client.RemoteModel):
+    return _bench_retrieval_on_dataset(
+        dataset_name="tinyqa",
+        dataset_path="./datasets",
+        rm=rm,
+        download_if_missing=False,
+    )
+
+
+def bench_on_all_retrieval(rm: client.RemoteModel):
+    return [
+        x(rm)
+        for x in [
+            bench_on_scifact,
+            bench_on_quora,
+            bench_on_hotpotqa,
+            bench_on_natural_questions,
+        ]
+    ]
+
+
+bench_retrievals = {
+    "all": bench_on_all_retrieval,
+    "scifact": bench_on_scifact,
+    "quora": bench_on_quora,
+    "hotpotqa": bench_on_hotpotqa,
+    "nq": bench_on_natural_questions,
+    "tinyqa": bench_on_tinyqa,
+}
+
+
+def bench_retrieve_on(task: config.RetrievalTask, rm: client.RemoteModel):
+    bench_function = bench_retrievals[task.dataset]
+    return bench_function(rm)
+
+
+# bench QA
+
+
+class QADataLoader(GenericDataLoader):
+
+    def _load_queries(self):
+        import json
+
+        with open(self.query_file, encoding="utf-8") as fIn:
+            for line in fIn:
+                line = json.loads(line)
+                self.queries[line.get("_id")] = {
+                    "text": line.get("text"),
+                    "answer": line.get("metadata").get("answer"),
+                }
+
+
+def _load_qa_dataset(dataset_path: str, dataset_name: str, download_if_missing: bool):
+    path = Path(dataset_path) / dataset_name
+    if not path.exists():
+        if not download_if_missing:
+            raise RuntimeError("no dataset, no benchmark")
+        path = _download_beir_dataset(dataset=dataset_name, path=dataset_path)
+
+    corpus, queries, qrels = QADataLoader(data_folder=path).load(split="test")
+    return corpus, queries, qrels
+
+
+def normalize(s: str) -> str:
+    import re
+
+    def remove_articles(s: str) -> str:
+        s = re.sub(r"\b(a|an|the)\b", "", s)
+        return s
+
+    def remove_whitespaces(s: str) -> str:
+        s = re.sub(r"\s+", " ", s)
+        return s.strip()
+
+    def remove_punctuations(s: str) -> str:
+        s = re.sub(r"[^\w\s]", "", s)
+        return s
+
+    def to_lowerspace(s: str) -> str:
+        return s.lower()
+
+    return remove_whitespaces(remove_articles(remove_punctuations(to_lowerspace(s))))
+
+
+# TODO: UNIMPLEMENTED
+def extract_answer_from_response(llm_response: str) -> str:
+    print(llm_response)
+    return llm_response
+
+
+def _evaluate_qa(rm: client.RemoteModel, corpus: dict, queries: dict) -> float:
+    client.rm_open(rm)
+
+    _dump_corpus(rm=rm, corpus=corpus)
+    ground_truth_answers = {k: [normalize(v["answer"])] for (k, v) in queries.items()}
+
+    correct_count = 0
+    total_count = len(queries)
+    for k, v in queries.items():
+        results = client.rm_chat(rm=rm, prompt=v["text"])
+        answer = extract_answer_from_response(results)
+        if normalize(answer) == ground_truth_answers[k]:
+            correct_count += 1
+
+    return correct_count / total_count
+
+
+# TODO: add specific prompt options here.
+def bench_on_qa(task: config.QATask, rm: client.RemoteModel):
+    corpus, queries, _ = _load_qa_dataset(
+        dataset_name=task.dataset, dataset_path="./datasets", download_if_missing=True
+    )
+    return _evaluate_qa(rm=rm, corpus=corpus, queries=queries)

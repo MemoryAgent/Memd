@@ -4,10 +4,13 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use memd_rag::component::LocalComponent;
 use axum::{http::StatusCode, response::IntoResponse};
+use memd_rag::{component::LocalComponent, method::RAGMethods};
 use serde::{Deserialize, Serialize};
-use tokio::signal::{unix::signal, unix::SignalKind};
+use tokio::{
+    signal::unix::{signal, SignalKind},
+    sync::Mutex,
+};
 
 /// [`Timer`] is used to record the processing time of this program.
 #[derive(Default)]
@@ -80,6 +83,7 @@ impl Metrics {
 pub struct App {
     local_comps: LocalComponent,
     metrics: Metrics,
+    rag_options: RAGMethods,
 }
 
 impl App {
@@ -87,15 +91,16 @@ impl App {
         Self {
             local_comps,
             metrics: Metrics::default(),
+            rag_options: RAGMethods::default(),
         }
     }
 }
 
 #[derive(Clone)]
-pub struct AppState(pub Arc<App>);
+pub struct AppState(pub Arc<Mutex<App>>);
 
 impl Deref for AppState {
-    type Target = App;
+    type Target = Arc<Mutex<App>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -104,7 +109,7 @@ impl Deref for AppState {
 
 impl DerefMut for AppState {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Arc::get_mut(&mut self.0).unwrap()
+        &mut self.0
     }
 }
 
@@ -148,6 +153,11 @@ pub async fn shutdown_signal() {
         _ = interrupt => {},
         _ = terminate => {},
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ServerMetadata {
+    opt: memd_rag::method::RAGMethods,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -15,10 +15,10 @@ use std::time::Duration;
 use std::vec;
 use tracing::info;
 
-use super::operation::Relation;
+use crate::component::deepseek::extract_answer;
 
-const DEEPSEEK_R1_1B: &str =
-    "lmstudio-community/DeepSeek-R1-Distill-Qwen-1.5B-GGUF~DeepSeek-R1-Distill-Qwen-1.5B-Q8_0.gguf";
+use super::deepseek;
+use super::operation::Relation;
 
 const CONTEXT_LENGTH: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(32768) };
 
@@ -41,7 +41,7 @@ fn create_llm_backend() -> Result<LlamaBackend> {
 
 fn create_llm_model(backend: &LlamaBackend) -> Result<LlamaModel> {
     let model_params = LlamaModelParams::default();
-    let model_file = download_from_hf(DEEPSEEK_R1_1B)?;
+    let model_file = download_from_hf(deepseek::DEEPSEEK_R1_1B)?;
     LlamaModel::load_from_file(backend, model_file, &model_params)
         .with_context(|| "load llama.cpp model failed.")
 }
@@ -69,7 +69,7 @@ fn batch_decode(
     ctx: &mut LlamaContext,
     tokens_list: &Vec<LlamaToken>,
 ) -> Result<String> {
-    let mut batch = LlamaBatch::new(512, 1);
+    let mut batch = LlamaBatch::new(2048, 1);
 
     let last_idx = (tokens_list.len() - 1) as i32;
     for (i, token) in (0_i32..).zip(tokens_list.into_iter()) {
@@ -193,35 +193,6 @@ fn test_two_questions() {
 
     let question_two = llm.complete("what is the solution of 1 + 1?").unwrap();
     println!("{question_two}");
-}
-
-/// Deepseek R1's answers contains two parts
-///
-/// <think>
-/// what it thinks ...
-/// </think>
-///
-/// answer
-///
-/// So it is necessary to write a function to parse these two parts
-fn extract_answer(answer: &str) -> (&str, &str) {
-    assert!(answer.starts_with("<think>\n"));
-    let subview = &answer[8..];
-    subview.split_once("</think>\n\n").unwrap()
-}
-
-#[test]
-fn test_extract_answer() {
-    let text = "<think>
-I am thinking about ...
-</think>
-
-The answer is quite straight forward.
-";
-
-    let (think, answer) = extract_answer(text);
-    assert_eq!(think, "I am thinking about ...\n");
-    assert_eq!(answer, "The answer is quite straight forward.\n");
 }
 
 //===-----------------------------------------------------------------------===

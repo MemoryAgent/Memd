@@ -1,10 +1,18 @@
+use crate::component::deepseek;
+
 use super::{
-    component::{self, database::Chunk, operation},
-    QueryResults,
+    component::{
+        self,
+        database::Chunk,
+        operation::{self, Document},
+    },
+    QueryResult, QueryResults,
 };
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use tracing::info;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NaiveRAGOption {
     pub chunk_size: usize,
     pub chunk_overlap: usize,
@@ -36,7 +44,7 @@ pub fn retrieve(
     question: &str,
     local_comps: &mut component::LocalComponent,
     top_k: usize,
-) -> Result<Vec<Chunk>> {
+) -> Result<Vec<(Chunk, f64)>> {
     let question_embedding = component::bert::encode_single_sentence(
         question,
         &mut local_comps.tokenizer,
@@ -49,12 +57,15 @@ pub fn retrieve(
 
     search_results
         .iter()
-        .map(|(chunk_id, _)| {
-            local_comps
-                .store
-                .find_chunk_by_id((*chunk_id).try_into().unwrap())
+        .map(|(chunk_id, conf)| {
+            Ok((
+                local_comps
+                    .store
+                    .find_chunk_by_id((*chunk_id).try_into()?)?,
+                (*conf).try_into()?,
+            ))
         })
-        .collect::<Result<Vec<Chunk>>>()
+        .collect::<Result<Vec<(Chunk, f64)>>>()
 }
 
 #[tokio::test]
@@ -86,7 +97,32 @@ pub fn query(
     local_comps: &mut component::LocalComponent,
     opt: &NaiveRAGOption,
 ) -> Result<QueryResults> {
-    Ok(QueryResults(vec![]))
+    let chunks = retrieve(query, local_comps, opt.top_k)?;
+    let mut doc_ids = chunks
+        .iter()
+        .map(|(chunk, conf)| (chunk.full_doc_id, *conf))
+        .collect::<Vec<(i64, f64)>>();
+    doc_ids.dedup_by_key(|x| x.0);
+    doc_ids
+        .iter()
+        .map(|(doc_id, conf)| {
+            let doc = local_comps.store.find_document_by_id(*doc_id)?;
+            Ok(QueryResult {
+                document: Document {
+                    name: doc.doc_name.clone(),
+                    content: doc.content.clone(),
+                },
+                conf_score: *conf,
+            })
+        })
+        .collect::<Result<Vec<QueryResult>>>()
+        .map(|x| QueryResults(x))
+}
+
+fn rerank(chunks: Vec<(Chunk, f64)>) -> Vec<Chunk> {
+    let mut chunks = chunks;
+    chunks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    chunks.iter().map(|(chunk, _)| chunk.clone()).collect()
 }
 
 fn build_rag_prompt(chunks: Vec<Chunk>, question: &str) -> String {
@@ -110,7 +146,59 @@ pub async fn chat(
     opt: &NaiveRAGOption,
 ) -> Result<String> {
     let chunks = retrieve(question, local_comps, opt.top_k)?;
-    let prompt = build_rag_prompt(chunks, question);
+    let reranked_chunks = rerank(chunks);
+    let prompt = build_rag_prompt(reranked_chunks, question);
+    info!("Prompt: {}", prompt);
     let answer = local_comps.llm.complete(&prompt)?;
-    Ok(answer)
+    info!("Answer: {}", answer);
+    let (_, answer) = deepseek::extract_answer(&answer);
+    Ok(answer.to_string())
+}
+
+#[tokio::test]
+async fn test_query() {
+    let question = "What is the capital of France?";
+
+    let mut local_comps = component::LocalComponent::default();
+
+    let opt = NaiveRAGOption {
+        chunk_size: 10,
+        chunk_overlap: 2,
+        top_k: 5,
+    };
+
+    let doc = component::operation::Document {
+        name: "test".to_string(),
+        content: "Paris is the capital of France. Berlin is the capital of Germany".to_string(),
+    };
+
+    insert(&doc, &mut local_comps, &opt).await.unwrap();
+
+    let doc = query(question, &mut local_comps, &opt);
+
+    println!("{:?}", doc);
+}
+
+#[tokio::test]
+async fn test_chat() {
+    let question = "What is the capital of France?";
+
+    let mut local_comps = component::LocalComponent::default();
+
+    let opt = NaiveRAGOption {
+        chunk_size: 10,
+        chunk_overlap: 2,
+        top_k: 5,
+    };
+
+    let doc = component::operation::Document {
+        name: "test".to_string(),
+        content: "Paris is the capital of France. Berlin is the capital of Germany".to_string(),
+    };
+
+    insert(&doc, &mut local_comps, &opt).await.unwrap();
+
+    let doc = chat(question, &mut local_comps, &opt).await;
+
+    println!("{:?}", doc);
 }

@@ -6,6 +6,11 @@ pub mod database;
 pub mod operation;
 pub mod sqlite;
 
+// TODO: consider put deepseek module below LLM module
+// TODO: add phi-4, GLM-edge, Qwen2.5-3B-Instruct, MiniCPM3-4B
+// TODO: as well as Deepseek R1 for baseline comparison
+pub mod deepseek;
+
 // TODO: compile llama.cpp in android
 #[cfg(not(target_os = "android"))]
 pub mod llm;

@@ -110,6 +110,11 @@ impl Store {
         sqlite::insert_document(&mut self.conn.lock().unwrap(), &doc)
     }
 
+    pub fn find_document_by_id(&self, doc_id: DocumentId) -> Result<Document> {
+        let mut conn = self.conn.lock().unwrap();
+        sqlite::query_document_by_id(&mut conn, doc_id)
+    }
+
     pub fn add_chunk(
         &self,
         operation::Chunk {

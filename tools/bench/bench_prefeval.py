@@ -1,5 +1,5 @@
 from typing import List
-from model import RemoteModel, rm_open, rm_close, rm_chat
+from client import RemoteModel, rm_open, rm_close, rm_chat
 from prefeval.benchmark_classification import (
     generate_prompt_sequences,
     PrefevalOptions,
@@ -10,7 +10,7 @@ from prefeval.utils.utils_mcq import extract_choice
 
 
 def test_prompt_sequence(rm: RemoteModel, prompt_sequence: List[str]):
-    for noise_prompt in prompt_sequence[:-2]:
+    for noise_prompt in prompt_sequence[:-1]:
         rm_chat(rm=rm, prompt=noise_prompt)
     response = rm_chat(rm=rm, prompt=prompt_sequence[-1])
     answer = extract_choice(response=response)

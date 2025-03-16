@@ -1,4 +1,8 @@
-datasets
+datasets/*
+!datasets/tinyqa
+
 __pycache__
 
 explore.ipynb
+
+results

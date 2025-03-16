@@ -1,10 +1,11 @@
 pub use crate::component;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::QueryResults;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemdAgentOption {
     pub chunk_size: usize,
     pub chunk_overlap: usize,

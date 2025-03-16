@@ -24,13 +24,13 @@ pub(crate) fn insert_document(
     operation::Document { name, content }: &operation::Document,
 ) -> Result<Document> {
     conn.query_row(
-        "INSERT INTO document (doc_name, content) VALUES (?) RETURNING ()",
+        "INSERT INTO document (doc_name, content) VALUES (?, ?) RETURNING id, doc_name, content",
         &[name, content],
         |row| {
             Ok(Document {
                 id: row.get(0)?,
                 doc_name: row.get(1)?,
-                content: row.get(3)?,
+                content: row.get(2)?,
             })
         },
     )

@@ -9,6 +9,7 @@ mod no_rag;
 mod raptor;
 mod read_agent;
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RAGMethods {
     HippoRAG,
     MemdAgent(memd_agent::MemdAgentOption),
@@ -16,6 +17,22 @@ pub enum RAGMethods {
     ReadAgent,
     NoRAG,
     NaiveRAG(naive_rag::NaiveRAGOption),
+}
+
+#[test]
+fn test_rag_method_serialization() {
+    let method = RAGMethods::MemdAgent(memd_agent::MemdAgentOption::default());
+    let serialized = serde_json::to_string(&method).unwrap();
+    println!("{}", serialized);
+    let method = RAGMethods::NoRAG;
+    let serialized = serde_json::to_string(&method).unwrap();
+    println!("{}", serialized);
+}
+
+impl Default for RAGMethods {
+    fn default() -> Self {
+        RAGMethods::NoRAG
+    }
 }
 
 pub async fn insert(
@@ -29,7 +46,7 @@ pub async fn insert(
         RAGMethods::Raptor => todo!(),
         RAGMethods::ReadAgent => todo!(),
         RAGMethods::NoRAG => no_rag::insert(doc, local_comps),
-        RAGMethods::NaiveRAG(_) => todo!(),
+        RAGMethods::NaiveRAG(opt) => naive_rag::insert(doc, local_comps, &opt).await,
     }
 }
 
@@ -41,6 +58,29 @@ pub struct QueryResult {
 
 #[derive(Serialize, Debug, Clone)]
 pub struct QueryResults(pub Vec<QueryResult>);
+
+#[test]
+fn test_query_results_serialization() {
+    let results = QueryResults(vec![
+        QueryResult {
+            document: component::operation::Document {
+                name: "name".to_string(),
+                content: "content".to_string(),
+            },
+            conf_score: 0.5,
+        },
+        QueryResult {
+            document: component::operation::Document {
+                name: "name".to_string(),
+                content: "content".to_string(),
+            },
+            conf_score: 0.5,
+        },
+    ]);
+
+    let serialized = serde_json::to_string(&results).unwrap();
+    println!("{}", serialized);
+}
 
 pub async fn query(
     question: &str,
