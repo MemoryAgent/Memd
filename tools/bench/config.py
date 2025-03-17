@@ -1,5 +1,5 @@
 import logging
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings, CliApp
 
@@ -11,7 +11,10 @@ class RetrievalTask(BaseModel):
 
 class QATask(BaseModel):
     kind: Literal["qa"]
-    dataset: Literal["hotpotqa", "tinyqa"]  # TODO: add more QA datasets
+    dataset: Literal["hotpotqa", "tinyqa"]
+    llm_judge_secret: Optional[
+        str
+    ]  # If llm is not available, it uses rule-based evaluator which is very bad.
 
 
 class PrefEvalTask(BaseModel):

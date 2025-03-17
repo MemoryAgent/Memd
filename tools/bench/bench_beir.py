@@ -17,8 +17,11 @@ from pathlib import Path
 
 import logging
 
+from openai import OpenAI
+
 import client
 import config
+import llm_judge
 
 
 def _download_beir_dataset(dataset: str = "scifact", path: str = "./datasets"):
@@ -217,32 +220,61 @@ def normalize(s: str) -> str:
     return remove_whitespaces(remove_articles(remove_punctuations(to_lowerspace(s))))
 
 
-# TODO: UNIMPLEMENTED
-def extract_answer_from_response(llm_response: str) -> str:
-    print(llm_response)
-    return llm_response
+def _make_qa_prompt(s: str) -> str:
+    prompt = """
+    Please answer my question directly. Do not explain. A word or a phrase is enough.
+    {question}
+    """
+    return prompt.format(question=s)
 
 
-def _evaluate_qa(rm: client.RemoteModel, corpus: dict, queries: dict) -> float:
+def _evaluate_qa_by_rules(rm: client.RemoteModel, corpus: dict, queries: dict) -> float:
     client.rm_open(rm)
 
     _dump_corpus(rm=rm, corpus=corpus)
-    ground_truth_answers = {k: [normalize(v["answer"])] for (k, v) in queries.items()}
+    ground_truth_answers = {k: normalize(v["answer"]) for (k, v) in queries.items()}
 
     correct_count = 0
     total_count = len(queries)
     for k, v in queries.items():
-        results = client.rm_chat(rm=rm, prompt=v["text"])
-        answer = extract_answer_from_response(results)
-        if normalize(answer) == ground_truth_answers[k]:
+        prompt = _make_qa_prompt(v["text"])
+        results = client.rm_chat(rm=rm, prompt=prompt)
+        if normalize(results) == ground_truth_answers[k]:
             correct_count += 1
 
     return correct_count / total_count
 
 
-# TODO: add specific prompt options here.
+def _evaluate_qa_by_llm(
+    rm: client.RemoteModel, corpus: dict, queries: dict, llm: OpenAI
+) -> float:
+    client.rm_open(rm)
+
+    _dump_corpus(rm=rm, corpus=corpus)
+    ground_truth_answers = {k: normalize(v["answer"]) for (k, v) in queries.items()}
+
+    correct_count = 0
+    total_count = len(queries)
+    for k, v in queries.items():
+        prompt = _make_qa_prompt(v["text"])
+        results = client.rm_chat(rm=rm, prompt=prompt)
+        if llm_judge.judge_qa(
+            output_answer=results, ground_truth_answer=ground_truth_answers[k], llm=llm
+        ):
+            correct_count += 1
+
+    return correct_count / total_count
+
+
 def bench_on_qa(task: config.QATask, rm: client.RemoteModel):
     corpus, queries, _ = _load_qa_dataset(
         dataset_name=task.dataset, dataset_path="./datasets", download_if_missing=True
     )
-    return _evaluate_qa(rm=rm, corpus=corpus, queries=queries)
+    if task.llm_judge_secret is None:
+        return _evaluate_qa_by_rules(rm=rm, corpus=corpus, queries=queries)
+    return _evaluate_qa_by_llm(
+        rm=rm,
+        corpus=corpus,
+        queries=queries,
+        llm=llm_judge.build_llm_judge(secret=task.llm_judge_secret),
+    )
