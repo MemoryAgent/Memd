@@ -40,8 +40,6 @@ class PrefevalOptions(BaseModel):
 
     system_prompt: str = Field("You are a helpful assistant")
 
-    work_dir: str
-
     dataset_dir: str = Field(description="place of prefeval/benchmark_dataset")
 
     max_tokens: int = Field(5)

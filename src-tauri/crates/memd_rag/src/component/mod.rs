@@ -89,3 +89,9 @@ impl Default for LocalComponent {
         }
     }
 }
+
+impl LocalComponent {
+    pub fn reset(&mut self) {
+        self.store.reset();
+    }
+}

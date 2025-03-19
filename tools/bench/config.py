@@ -2,6 +2,7 @@ import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings, CliApp
+from prefeval.benchmark_classification import PrefevalOptions
 
 
 class RetrievalTask(BaseModel):
@@ -19,6 +20,7 @@ class QATask(BaseModel):
 
 class PrefEvalTask(BaseModel):
     kind: Literal["prefeval"]
+    opt: PrefevalOptions
 
 
 BenchmarkTask = RetrievalTask | QATask | PrefEvalTask

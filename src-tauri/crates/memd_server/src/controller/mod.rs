@@ -1,7 +1,6 @@
 use std::{
     ops::{Deref, DerefMut},
     sync::Arc,
-    time::{Duration, SystemTime},
 };
 
 use axum::{http::StatusCode, response::IntoResponse};
@@ -12,73 +11,7 @@ use tokio::{
     sync::Mutex,
 };
 
-/// [`Timer`] is used to record the processing time of this program.
-#[derive(Default)]
-struct Timer {
-    total: Duration,
-    session_started: Option<SystemTime>,
-}
-
-impl Timer {
-    fn reset(&mut self) {
-        self.total = Duration::from_secs(0);
-        self.session_started = None;
-    }
-
-    fn start(&mut self) {
-        self.session_started = Some(match self.session_started {
-            Some(_) => panic!("started timer when it is started."),
-            None => SystemTime::now(),
-        });
-    }
-
-    fn pause(&mut self) {
-        self.total += SystemTime::elapsed(&self.session_started.unwrap()).unwrap();
-        self.session_started = None
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct MetricData {
-    embedding_cost: Duration,
-    query_cost: Duration,
-}
-
-#[derive(Default)]
-struct Metrics {
-    embedding_timer: Timer,
-    query_timer: Timer,
-}
-
-impl Metrics {
-    fn reset(&mut self) {
-        self.embedding_timer.reset();
-        self.query_timer.reset();
-    }
-
-    fn start_embedding(&mut self) {
-        self.embedding_timer.start();
-    }
-
-    fn end_embedding(&mut self) {
-        self.embedding_timer.pause();
-    }
-
-    fn start_query(&mut self) {
-        self.query_timer.start();
-    }
-
-    fn end_query(&mut self) {
-        self.query_timer.pause();
-    }
-
-    fn report(&self) -> MetricData {
-        MetricData {
-            embedding_cost: self.embedding_timer.total,
-            query_cost: self.query_timer.total,
-        }
-    }
-}
+use crate::metric::Metrics;
 
 pub struct App {
     local_comps: LocalComponent,
@@ -90,9 +23,13 @@ impl App {
     pub fn new(local_comps: LocalComponent) -> Self {
         Self {
             local_comps,
-            metrics: Metrics::default(),
+            metrics: Metrics::new(),
             rag_options: RAGMethods::default(),
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.local_comps.reset();
     }
 }
 

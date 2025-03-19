@@ -17,19 +17,13 @@ def test_prompt_sequence(rm: RemoteModel, prompt_sequence: List[str]):
     return 1 if answer == "A" else 0
 
 
-def bench_prefeval(rm: RemoteModel):
-    opt = PrefevalOptions(
-        inter_turns=1,
-        task=Task.ZERO_SHOT,
-        pref_form=PrefForm.EXPLICIT,
-        work_dir=".",
-        dataset_dir="./prefeval",
-    )
+def bench_prefeval(rm: RemoteModel, opt: PrefevalOptions):
     prompts = generate_prompt_sequences(opt)
 
     rm_open(rm)
     correct_number = 0
     for prompt_sequence in prompts:
+        print(prompt_sequence)
         correct_number += test_prompt_sequence(rm, prompt_sequence)
     performance = rm_close(rm)
     return (correct_number, performance)

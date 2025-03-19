@@ -258,8 +258,13 @@ def _evaluate_qa_by_llm(
     for k, v in queries.items():
         prompt = _make_qa_prompt(v["text"])
         results = client.rm_chat(rm=rm, prompt=prompt)
-        if llm_judge.judge_qa(
-            output_answer=results, ground_truth_answer=ground_truth_answers[k], llm=llm
+        if (
+            llm_judge.judge_qa(
+                output_answer=results,
+                ground_truth_answer=ground_truth_answers[k],
+                llm=llm,
+            )
+            > 5
         ):
             correct_count += 1
 

@@ -363,3 +363,12 @@ pub(crate) fn find_chunk_by_entity_id(conn: &mut Connection, entity_id: i64) -> 
     )
     .with_context(|| "Failed to find chunk by entity id")
 }
+
+pub(crate) fn clear_all_tables(conn: &mut Connection) -> Result<()> {
+    conn.execute("DELETE FROM document", [])?;
+    conn.execute("DELETE FROM chunk", [])?;
+    conn.execute("DELETE FROM entity", [])?;
+    conn.execute("DELETE FROM relation", [])?;
+    conn.execute("DELETE FROM entity_chunk", [])?;
+    Ok(())
+}

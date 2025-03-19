@@ -52,6 +52,15 @@ pub struct Store {
     node_index: usearch::Index,
 }
 
+/// TODO: this should be mutable, is usearch doing it wrong or I understand it wrong?
+fn insert_to_index(index: &usearch::Index, id: u64, embedding: &[f32]) -> Result<()> {
+    if index.size() >= index.capacity() {
+        index.reserve(index.capacity() * 2)?;
+    }
+    index.add(id, embedding)?;
+    Ok(())
+}
+
 impl Default for Store {
     fn default() -> Self {
         let mut conn = Connection::open_in_memory().unwrap();
@@ -134,8 +143,11 @@ impl Store {
             content,
             &embedding_vec,
         )?;
-        self.text_index
-            .add(chunk.id.try_into().unwrap(), &embedding_vec)?;
+        insert_to_index(
+            &self.text_index,
+            chunk.id.try_into().unwrap(),
+            &embedding_vec,
+        )?;
         Ok(chunk)
     }
 
@@ -144,8 +156,11 @@ impl Store {
         let entity =
             sqlite::insert_entity(&mut self.conn.lock().unwrap(), &entity.name, &embedding_vec)?;
         sqlite::insert_entity_chunk(&mut self.conn.lock().unwrap(), entity.id, chunk.id)?;
-        self.node_index
-            .add(entity.id.try_into().unwrap(), &embedding_vec)?;
+        insert_to_index(
+            &self.node_index,
+            entity.id.try_into().unwrap(),
+            &embedding_vec,
+        )?;
         Ok(entity)
     }
 
@@ -268,5 +283,16 @@ impl Store {
         ids.iter()
             .map(|id| sqlite::find_chunk_by_entity_id(&mut conn, *id))
             .collect()
+    }
+
+    pub fn get_memory_usage(&self) -> usize {
+        self.text_index.memory_usage() + self.node_index.memory_usage()
+    }
+
+    pub fn reset(&mut self) {
+        self.text_index.reset().unwrap();
+        self.node_index.reset().unwrap();
+        let mut conn = self.conn.lock().unwrap();
+        sqlite::clear_all_tables(&mut conn).unwrap();
     }
 }

@@ -1,6 +1,6 @@
-use std::time::Duration;
+use crate::metric::MetricData;
 
-use super::{MetricData, Result, StorePayload};
+use super::{Result, StorePayload};
 use axum::Json;
 use memd_rag::method::QueryResults;
 
@@ -25,8 +25,9 @@ async fn chat_api(question: String) -> Result<String> {
 
 async fn close_benchmark_api() -> Json<MetricData> {
     Json(MetricData {
-        embedding_cost: Duration::from_secs(0),
-        query_cost: Duration::from_secs(0),
+        request_metrics: vec![],
+        start_memory_usage: 0,
+        end_memory_usage: 0,
     })
 }
 

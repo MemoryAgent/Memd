@@ -1,7 +1,7 @@
 from typing import List, Literal, Optional
 import requests
 
-from enum import Enum
+from enum import Enum, StrEnum
 from pydantic import BaseModel, TypeAdapter
 
 
@@ -97,7 +97,7 @@ def rm_open(rm: RemoteModel, additional_metadata: Optional[MemdOpt] = None) -> b
         return True
     raise RuntimeError(
         f"""failed to open remote model {rm.url} with {additional_metadata}.
-        error message: {resp.content.decode("utf-8")}
+        error message: {resp}
         """
     )
 
@@ -151,17 +151,39 @@ class PerformanceMetric(BaseModel):
     query_time: Seconds
 
 
+class RequestType(StrEnum):
+    Store = "Store"
+    Query = "Query"
+    Chat = "Chat"
+
+
+class PerRequestMetricData(BaseModel):
+    kind: RequestType
+    time_cost: Seconds
+    storage_memory_usage: int
+    total_memory_usage_before: int
+    total_memory_usage_after: int
+
+
 def seconds_from_rust_duration(json: dict):
     secs = json["secs"]
     nanos = json["nanos"]
     return Seconds(seconds=secs + nanos / 1e9)
 
 
-def rm_close(rm: RemoteModel) -> PerformanceMetric:
+def rm_close(rm: RemoteModel) -> List[PerRequestMetricData]:
     assert rm.state == RemoteState.OPEN
     resp = requests.post(f"{rm.url}/close")
     performance = resp.json()
-    return PerformanceMetric(
-        embedding_time=seconds_from_rust_duration(performance["embedding_cost"]),
-        query_time=seconds_from_rust_duration(performance["query_cost"]),
-    )
+    all_metrics = []
+    for req_prof in performance["request_metrics"]:
+        all_metrics.append(
+            PerRequestMetricData(
+                kind=req_prof["kind"],
+                time_cost=seconds_from_rust_duration(req_prof["time_cost"]),
+                storage_memory_usage=req_prof["storage_memory_usage"],
+                total_memory_usage_before=req_prof["total_memory_usage_before"],
+                total_memory_usage_after=req_prof["total_memory_usage_after"],
+            )
+        )
+    return all_metrics

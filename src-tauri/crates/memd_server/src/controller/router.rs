@@ -1,4 +1,6 @@
-use super::{AppState, MetricData, Result, ServerMetadata, StorePayload};
+use crate::metric::{self, MetricData, Timer};
+
+use super::{AppState, Result, ServerMetadata, StorePayload};
 use axum::{debug_handler, extract::State, Json};
 use memd_rag::{component::operation::Document, method::QueryResults};
 
@@ -17,7 +19,8 @@ async fn store_api(
     Json(text): Json<StorePayload>,
 ) -> Result<&'static str> {
     let method = bs_state.lock().await.rag_options.clone();
-    bs_state.lock().await.metrics.start_embedding();
+    let start_memory = metric::get_current_memory().unwrap().physical_mem;
+    let timer = Timer::new();
     memd_rag::method::insert(
         &Document {
             name: match text.title {
@@ -30,30 +33,57 @@ async fn store_api(
         method,
     )
     .await?;
-    bs_state.lock().await.metrics.end_embedding();
+    let elapsed = timer.read()?;
+    let store_memory = bs_state.lock().await.local_comps.store.get_memory_usage();
+    let end_memory = metric::get_current_memory().unwrap().physical_mem;
+    bs_state
+        .lock()
+        .await
+        .metrics
+        .add_store_metric(start_memory, end_memory, store_memory, elapsed);
     Ok("added")
 }
 
 /// query is a intermediate step of RAG. It gives the relating document with confidence score.
 async fn query_api(State(bs_state): State<AppState>, query: String) -> Result<Json<QueryResults>> {
-    bs_state.lock().await.metrics.start_query();
     let method = bs_state.lock().await.rag_options.clone();
+    let start_memory = metric::get_current_memory().unwrap().physical_mem;
+    let timer = Timer::new();
     let answer =
         memd_rag::method::query(&query, &mut bs_state.lock().await.local_comps, method).await?;
-    bs_state.lock().await.metrics.end_query();
+    let elapsed = timer.read()?;
+    let store_memory = bs_state.lock().await.local_comps.store.get_memory_usage();
+    let end_memory = metric::get_current_memory().unwrap().physical_mem;
+    bs_state
+        .lock()
+        .await
+        .metrics
+        .add_query_metric(start_memory, end_memory, store_memory, elapsed);
     Ok(Json(answer))
 }
 
 async fn chat_api(State(bs_state): State<AppState>, question: String) -> Result<String> {
     let method = bs_state.lock().await.rag_options.clone();
+    let start_memory = metric::get_current_memory().unwrap().physical_mem;
+    let timer = Timer::new();
     let answer =
         memd_rag::method::chat(&question, &mut bs_state.lock().await.local_comps, method).await?;
-
+    let elapsed = timer.read()?;
+    let store_memory = bs_state.lock().await.local_comps.store.get_memory_usage();
+    let end_memory = metric::get_current_memory().unwrap().physical_mem;
+    bs_state
+        .lock()
+        .await
+        .metrics
+        .add_chat_metric(start_memory, end_memory, store_memory, elapsed);
     Ok(answer.to_string())
 }
 
 async fn close_benchmark_api(State(bs_state): State<AppState>) -> Json<MetricData> {
-    Json(bs_state.lock().await.metrics.report())
+    let report = bs_state.lock().await.metrics.get_metrics().clone();
+    bs_state.lock().await.metrics.reset();
+    bs_state.lock().await.reset();
+    Json(report)
 }
 
 pub fn make_router(app_state: AppState) -> axum::Router {

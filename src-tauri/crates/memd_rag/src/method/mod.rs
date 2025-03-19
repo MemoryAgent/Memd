@@ -2,6 +2,7 @@ pub use crate::component;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+mod cluster;
 mod hippo_rag;
 mod memd_agent;
 mod naive_rag;
