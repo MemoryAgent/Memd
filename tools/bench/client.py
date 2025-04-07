@@ -27,6 +27,7 @@ from pydantic import BaseModel, TypeAdapter
 # Close --- the benchmark informs the model to stop testing
 #   via network --- GET /close
 #
+# TODO: make these async
 
 
 class RemoteState(Enum):

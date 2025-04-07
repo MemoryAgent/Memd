@@ -32,3 +32,11 @@ def plot_query_time_usage(metrics: List[PerRequestMetricData]) -> None:
     x = list(range(len(y)))
 
     plt.plot(x, y, label="Query Time Usage")
+
+def plot_store_time_usage(metrics: List[PerRequestMetricData]) -> None:
+    store_metrics = select_by_req_type(metrics, RequestType.Store)
+    store_time_usages = [x.time_cost.seconds for x in store_metrics]
+    y = store_time_usages
+    x = list(range(len(y)))
+
+    plt.plot(x, y, label="Store Time Usage")

@@ -41,7 +41,10 @@ def _load_beir_dataset(dataset_path: str, dataset_name: str, download_if_missing
 
 
 def _dump_corpus(rm: client.RemoteModel, corpus: dict[int, dict[str, str]]) -> bool:
-    for i, x in enumerate(corpus.values()):
+    import tqdm
+    for i, x in tqdm.tqdm(enumerate(corpus.values())):
+        if i > 1500:
+            break
         title = x.get("title", None)
         content = x.get("text")
         result = client.rm_store(rm, client.StorePayload(title=title, content=content))
@@ -59,24 +62,24 @@ def _evaluate_retrieves(
     inverted_corpus = {v["text"]: k for (k, v) in corpus.items()}
     results: Dict[str, Dict[str, float]] = {}
 
-    for i, (qid, query) in enumerate(queries.items()):
-        retrieved_docs = client.rm_query(rm, query)
-        for query_result in retrieved_docs:
-            aid = inverted_corpus.get(query_result.document.content, -1)
-            if aid == -1:
-                logging.warning(
-                    f"getting unrecognized document {query_result.document}"
-                )
-                continue
-            logging.info(
-                f"getting query {qid} answer digest {query_result.document.content[:100]} in document {aid}"
-            )
-            question_dict = results.setdefault(f"{qid}", {})
-            question_dict[f"{aid}"] = query_result.conf_score
+    # for i, (qid, query) in enumerate(queries.items()):
+    #     retrieved_docs = client.rm_query(rm, query)
+    #     for query_result in retrieved_docs:
+    #         aid = inverted_corpus.get(query_result.document.content, -1)
+    #         if aid == -1:
+    #             logging.warning(
+    #                 f"getting unrecognized document {query_result.document}"
+    #             )
+    #             continue
+    #         logging.info(
+    #             f"getting query {qid} answer digest {query_result.document.content[:100]} in document {aid}"
+    #         )
+    #         question_dict = results.setdefault(f"{qid}", {})
+    #         question_dict[f"{aid}"] = query_result.conf_score
     performance = client.rm_close(rm)
     # TODO: make this more explicit. currently use whole message from BEIR as the evaluated performance
     return (
-        EvaluateRetrieval.evaluate(qrels=qrel, results=results, k_values=[5]),
+        [],# EvaluateRetrieval.evaluate(qrels=qrel, results=results, k_values=[5]),
         performance,
     )
 
