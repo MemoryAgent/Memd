@@ -1,6 +1,9 @@
 use anyhow::Result;
 
-use super::{component::{self, operation::Document}, QueryResults};
+use super::{
+    component::{self, operation::Document},
+    QueryResults,
+};
 
 pub(super) fn insert(_doc: &Document, _local_comps: &mut component::LocalComponent) -> Result<()> {
     Ok(())
