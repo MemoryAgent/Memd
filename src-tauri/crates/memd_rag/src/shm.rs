@@ -11,6 +11,12 @@ type VecId = usize;
 
 const INVALID_VECTOR_ID: usize = usize::MAX;
 
+#[derive(Clone, Copy, Debug)]
+pub struct RecordID {
+    page_id: usize,
+    page_offset: usize,
+}
+
 /// Index page is the basic data structure for storing vector indices, its layout
 ///
 /// | Field     | description     |
@@ -19,7 +25,7 @@ const INVALID_VECTOR_ID: usize = usize::MAX;
 /// | vector unit size  self evident
 /// | vector data       embedding data
 /// | vector ids        ids for each embedding vector
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LeafPage {
     page_id: usize,
     vector_unit_size: usize,
@@ -73,19 +79,34 @@ impl LeafPage {
         self.vector_data.capacity() + size_of::<VecId>() * self.vector_ids.capacity()
     }
 
-    pub fn append(&mut self, vectors: &[u8], ids: &[VecId]) {
+    pub fn bulk_append(&mut self, vectors: &[u8], ids: &[VecId]) -> Result<Vec<RecordID>> {
         let vector_count = ids.len();
         assert!(vectors.len() % self.vector_unit_size == 0);
         assert!(vector_count * self.vector_unit_size == vectors.len());
+
         if self.current_vectors + vectors.len() > self.vector_data.len() {
-            panic!("not enough space");
+            bail!("not enough space");
         }
+
         let new_vector_count = self.current_vectors + vector_count;
         self.vector_data[self.current_vectors * self.vector_unit_size
             ..new_vector_count * self.vector_unit_size]
             .copy_from_slice(vectors);
         self.vector_ids[self.current_vectors..new_vector_count].copy_from_slice(ids);
         self.current_vectors = new_vector_count;
+
+        Ok((0..vector_count)
+            .map(|i| RecordID {
+                page_id: self.page_id,
+                page_offset: (self.current_vectors - vector_count + i) * self.vector_unit_size,
+            })
+            .collect())
+    }
+
+    pub fn append(&mut self, vector: &[u8], id: VecId) -> Result<RecordID> {
+        let append_results = self.bulk_append(vector, &[id])?;
+        assert_eq!(append_results.len(), 1);
+        Ok(append_results[0])
     }
 
     pub fn get_vectors(&self) -> &[u8] {
@@ -105,10 +126,12 @@ impl LeafPage {
     }
 
     pub fn to_zip_iter(&self) -> impl Iterator<Item = (VecId, &[u8])> {
-        self.vector_ids
-            .iter()
-            .zip(self.vector_data.chunks_exact(self.vector_unit_size))
-            .map(|(id, data)| (*id, data))
+        (0..self.current_vectors).map(|i| {
+            let id = self.vector_ids[i];
+            let vector =
+                &self.vector_data[i * self.vector_unit_size..(i + 1) * self.vector_unit_size];
+            (id, vector)
+        })
     }
 
     pub fn persist(&self, f: &mut fs::File) {
@@ -145,7 +168,7 @@ fn test_leaf_page() {
     let mut page = LeafPage::new(0, 10, 4);
     let vectors = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
     let ids = vec![0, 1];
-    page.append(&vectors, &ids);
+    let _ = page.bulk_append(&vectors, &ids);
     assert_eq!(page.get_ids(), &[0, 1]);
     assert_eq!(page.get_vector(0), &[1, 2, 3, 4]);
 }
@@ -155,7 +178,7 @@ fn test_persist_load() {
     let mut page = LeafPage::new(0, 10, 4);
     let vectors = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
     let ids = vec![0, 1];
-    page.append(&vectors, &ids);
+    let _ = page.bulk_append(&vectors, &ids);
     let mut file = File::create("test_page.bin").unwrap();
     page.persist(&mut file);
     file.flush().unwrap();
@@ -170,28 +193,6 @@ fn test_persist_load() {
     assert_eq!(loaded_page.current_vectors, 2);
     assert_eq!(loaded_page.page_id, 0);
     fs::remove_file("test_page.bin").unwrap();
-}
-
-/// Internal Page is used for multi layer indexing.
-/// TODO: implement internal page
-/// TODO: make page type erased.
-#[derive(Debug)]
-pub struct InternalPage {
-    vector_unit_size: usize,
-    max_vectors: usize,
-    vector_data: Vec<u8>,
-    page_ids: Vec<usize>,
-    vector_ids: Vec<VecId>,
-}
-
-pub enum PageContent {
-    LeafPage(LeafPage),
-    InternalPage(InternalPage),
-}
-
-pub struct Page {
-    page_id: usize,
-    content: PageContent,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -220,7 +221,7 @@ pub struct BufferPool {
     /// page id to page frame index.
     page_table: HashMap<usize, usize>,
     /// list of free page frame ids.
-    free_page: Vec<usize>,
+    free_frames: Vec<usize>,
     /// page frame id to page frame metadata.
     metadata: HashMap<usize, PageMetadata>,
 }
@@ -228,20 +229,28 @@ pub struct BufferPool {
 impl BufferPool {
     pub fn new(
         backed_file: PathBuf,
+        maximum_page_id: usize,
         pool_size: usize,
         page_size: usize,
         vector_unit_size: usize,
     ) -> BufferPool {
-        let page_storage = Vec::with_capacity(pool_size);
+        let page_storage = {
+            let mut v = Vec::new();
+            let max_vectors = (page_size - 32) / (vector_unit_size + 8);
+            v.resize(pool_size, LeafPage::new(0, max_vectors, vector_unit_size));
+            v
+        };
+
         let free_page = (0..pool_size).collect();
+
         Self {
             backed_file,
-            maximum_page_id: 0,
+            maximum_page_id,
             page_size,
             vector_unit_size,
             page_table: HashMap::new(),
             page_storage,
-            free_page,
+            free_frames: free_page,
             metadata: HashMap::new(),
         }
     }
@@ -304,6 +313,7 @@ impl BufferPool {
             self.page_storage[frame_id].persist(&mut f);
             metadata.dirty = false;
         }
+        // TODO(SEVERE): add padding to PAGE_SIZE
     }
 
     pub fn flush_page(&mut self, page_id: usize) {
@@ -315,7 +325,12 @@ impl BufferPool {
     }
 
     pub fn flush_all(&mut self) {
-        for i in 0..self.page_storage.len() {
+        let all_frames = self
+            .page_table
+            .iter()
+            .map(|(_, frame_id)| *frame_id)
+            .collect::<Vec<_>>();
+        for i in all_frames {
             self.flush_frame(i);
         }
     }
@@ -336,7 +351,7 @@ impl BufferPool {
     }
 
     pub fn claim_free_slot(&mut self) -> Option<usize> {
-        if let Some(page_id) = self.free_page.pop() {
+        if let Some(page_id) = self.free_frames.pop() {
             return Some(page_id);
         }
         if let Some(victim) = self.get_evict_victim() {
@@ -362,6 +377,10 @@ impl LeafPageGuard {
         page_frame_id: usize,
         buffer_pool: *mut BufferPool,
     ) -> LeafPageGuard {
+        // SAFETY: single thread, buffer pool live longer than this method.
+        unsafe {
+            buffer_pool.as_mut().unwrap().pin_page(page_id);
+        }
         LeafPageGuard {
             page_id,
             page_frame_id,
@@ -400,15 +419,16 @@ impl DerefMut for LeafPageGuard {
 }
 
 impl BufferPool {
-    pub fn fetch_page(&mut self, page_id: usize) -> &LeafPage {
-        if let Some(page) = self.page_table.get(&page_id) {
-            return &self.page_storage[*page];
+    pub fn fetch_page(&mut self, page_id: usize) -> LeafPageGuard {
+        if let Some(frame_id) = self.page_table.get(&page_id) {
+            return LeafPageGuard::new(page_id, *frame_id, self);
         }
-        if let Some(free_page_id) = self.free_page.pop() {
+        if let Some(free_frame_id) = self.free_frames.pop() {
             let page = self.read_page(page_id).unwrap();
-            self.page_storage[free_page_id] = page;
-            self.page_table.insert(page_id, free_page_id);
-            return &self.page_storage[free_page_id];
+            self.page_storage[free_frame_id] = page;
+            self.page_table.insert(page_id, free_frame_id);
+            self.metadata.insert(free_frame_id, PageMetadata::default());
+            return LeafPageGuard::new(page_id, free_frame_id, self);
         }
         panic!("no free page");
     }
@@ -424,7 +444,7 @@ impl BufferPool {
             self.page_storage[frame_id] = page;
             self.page_table.insert(page_id, frame_id);
             self.metadata.insert(frame_id, PageMetadata::default());
-            return frame_id;
+            return page_id;
         }
         panic!("no free page");
     }
@@ -432,12 +452,60 @@ impl BufferPool {
 
 #[test]
 fn bufferpool_new() {
-    let mut buffer_pool = BufferPool::new("test.bin".into(), 10, 4096, 4);
+    let mut buffer_pool = BufferPool::new("test.bin".into(), 0, 10, 4096, 4);
     assert_eq!(buffer_pool.page_size, 4096);
     assert_eq!(buffer_pool.vector_unit_size, 4);
     assert_eq!(buffer_pool.page_storage.capacity(), 10);
-    assert_eq!(buffer_pool.free_page.len(), 10);
+    assert_eq!(buffer_pool.free_frames.len(), 10);
     buffer_pool.flush_all();
+}
+
+#[derive(Clone, Debug)]
+pub struct TopKBuffer {
+    /// vector ID -> conf_score
+    buffer: Vec<(usize, f32)>,
+    /// top k
+    k: usize,
+}
+
+impl TopKBuffer {
+    pub fn new(k: usize) -> Self {
+        Self {
+            buffer: Vec::with_capacity(k),
+            k,
+        }
+    }
+
+    pub fn push(&mut self, id: usize, score: f32) {
+        if self.buffer.len() < self.k {
+            self.buffer.push((id, score));
+            // Total order comparison of floats is supported since Rust 1.62
+            self.buffer.sort_by(|a, b| a.1.total_cmp(&b.1));
+        } else if score > self.buffer[0].1 {
+            self.buffer[0] = (id, score);
+            self.buffer.sort_by(|a, b| a.1.total_cmp(&b.1));
+        }
+    }
+
+    pub fn get_topk(&self) -> &[(usize, f32)] {
+        &self.buffer
+    }
+}
+
+/// TODO: this is to be replaced by FAISS because I don't want to write SIMD optimizations ...
+fn calculate_similarity(vec0: &[f32], vec1: &[f32]) -> f32 {
+    let mut sum = 0.0;
+    for i in 0..vec0.len() {
+        sum += vec0[i] * vec1[i];
+    }
+    sum / (vec0.len() as f32)
+}
+
+/// reinterpret &[u8] as &[f32]
+fn reinterpret_as_f32<'a>(slice: &'a [u8]) -> &'a [f32] {
+    assert!(slice.len() % std::mem::size_of::<f32>() == 0);
+    let len = slice.len() / std::mem::size_of::<f32>();
+    unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const f32, len) }
 }
 
 pub struct ShmIndex {
@@ -457,7 +525,7 @@ pub struct ShmIndexOptions {
 }
 
 impl ShmIndex {
-    const MAGIC_HEADER: u32 = 0xDEADBEEF;
+    const MAGIC_HEADER: u64 = 0xDEADBEEFDEADBEEF;
 
     const METADATA_LENGTH: usize = size_of::<u32>() + size_of::<usize>() * 2;
 
@@ -468,6 +536,7 @@ impl ShmIndex {
         }
         let buffer_pool = BufferPool::new(
             backed_file,
+            0,
             options.pool_size,
             options.page_size,
             options.vector_unit_size,
@@ -480,26 +549,101 @@ impl ShmIndex {
             bail!("file not found");
         }
         let mut f = File::open(&file)?;
-        let mut header = [0u8; 4];
+        let mut header = [0u8; 8];
         f.read_exact(&mut header)?;
-        let magic = u32::from_le_bytes(header);
+        let magic = u64::from_le_bytes(header);
         if magic != Self::MAGIC_HEADER {
             bail!("invalid file format");
         }
         let page_size = read_usize(&mut f)?;
         let vector_unit_size = read_usize(&mut f)?;
+        let maximum_page_id = read_usize(&mut f)?;
 
-        let buffer_pool = BufferPool::new(file, pool_size, page_size, vector_unit_size);
+        let buffer_pool = BufferPool::new(
+            file,
+            maximum_page_id,
+            pool_size,
+            page_size,
+            vector_unit_size,
+        );
         Ok(Self { buffer_pool })
     }
 
     pub fn persist(&mut self) -> Result<()> {
         let mut f = File::create(&self.buffer_pool.backed_file)?;
         f.write_all(&Self::MAGIC_HEADER.to_le_bytes())?;
-        f.write_all(&(self.buffer_pool.page_size as u32).to_le_bytes())?;
-        f.write_all(&(self.buffer_pool.vector_unit_size as u32).to_le_bytes())?;
+        f.write_all(&(self.buffer_pool.page_size).to_le_bytes())?;
+        f.write_all(&(self.buffer_pool.vector_unit_size).to_le_bytes())?;
+        f.write_all(&(self.buffer_pool.maximum_page_id).to_le_bytes())?;
         self.buffer_pool.flush_all();
         Ok(())
     }
-    
+
+    /// insert one vector into the index
+    pub fn insert(&mut self, vector_data: &[u8], vector_id: VecId) -> Result<RecordID> {
+        let latest_page_id = if self.buffer_pool.maximum_page_id > 0 {
+            self.buffer_pool.maximum_page_id - 1
+        } else {
+            self.buffer_pool.create_page()
+        };
+
+        // RAII scope for latest page
+        let latest_adequate_page_id = {
+            let latest_page = self.buffer_pool.fetch_page(latest_page_id);
+            if latest_page.current_vectors >= latest_page.max_vectors {
+                self.buffer_pool.create_page()
+            } else {
+                latest_page.page_id
+            }
+        };
+
+        // RAII scope for usable page_id
+        let rid = {
+            let mut page = self.buffer_pool.fetch_page(latest_adequate_page_id);
+            let rid = page.append(vector_data, vector_id)?;
+            self.buffer_pool.mark_dirty(page.page_id);
+            rid
+        };
+
+        Ok(rid)
+    }
+
+    pub fn query(&mut self, target_vector: &[u8]) -> Result<TopKBuffer> {
+        let target_vector = reinterpret_as_f32(target_vector);
+        let mut topk = TopKBuffer::new(10);
+        for page_id in 0..self.buffer_pool.maximum_page_id {
+            let page = self.buffer_pool.fetch_page(page_id);
+            for (id, vector) in page.to_zip_iter() {
+                let vector = reinterpret_as_f32(vector);
+                let score = calculate_similarity(vector, target_vector);
+                topk.push(id, score);
+            }
+        }
+        Ok(topk)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_shm_index() {
+        let mut index = ShmIndex::new(ShmIndexOptions {
+            backed_file: PathBuf::from("test.bin"),
+            pool_size: 10,
+            page_size: 4096,
+            vector_unit_size: 4,
+        })
+        .unwrap();
+        let vector = vec![1u8, 2, 3, 4];
+        let id = index.insert(&vector, 0).unwrap();
+        println!("inserted rid: {:?}", id);
+        assert_eq!(id.page_id, 0);
+        assert_eq!(id.page_offset, 0);
+        let target_vector = vec![1u8, 2, 3, 4];
+        let topk = index.query(&target_vector).unwrap();
+        println!("topk: {:?}", topk.get_topk());
+    }
 }
