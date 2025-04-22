@@ -1,3 +1,9 @@
+//!
+//! Shm declares a vector index
+//!
+//! input: VecID + Vector
+//!
+
 use anyhow::{bail, Result};
 use std::{
     collections::HashMap,
@@ -11,10 +17,11 @@ type VecId = usize;
 
 const INVALID_VECTOR_ID: usize = usize::MAX;
 
+/// RecordID is the physical position of vector indices.
 #[derive(Clone, Copy, Debug)]
 pub struct RecordID {
-    page_id: usize,
-    page_offset: usize,
+    pub page_id: usize,
+    pub page_offset: usize,
 }
 
 /// Index page is the basic data structure for storing vector indices, its layout
@@ -31,7 +38,6 @@ pub struct LeafPage {
     vector_unit_size: usize,
     max_vectors: usize,
     current_vectors: usize,
-    // TODO: consider zero copy
     vector_data: Vec<u8>,
     // The alignments of id and data is somehow different.
     // vector_ids is the record id of the text for which the vector is encoded.
@@ -59,6 +65,15 @@ fn read_vec_usize(file: &mut File, count: usize) -> Result<Vec<usize>> {
 }
 
 impl LeafPage {
+    const HEADER_SIZE: usize =
+        size_of::<LeafPage>() - size_of::<Vec<u8>>() - size_of::<Vec<VecId>>();
+
+    fn calculate_max_vectors(page_size: usize, vector_unit_size: usize) -> usize {
+        let page_data_size = page_size - LeafPage::HEADER_SIZE;
+        let vector_id_size = size_of::<VecId>();
+        page_data_size / (vector_unit_size + vector_id_size)
+    }
+
     pub fn new(page_id: usize, max_vectors: usize, vector_unit_size: usize) -> LeafPage {
         let mut vector_data = Vec::new();
         vector_data.resize(max_vectors * vector_unit_size, 0xff);
@@ -81,10 +96,9 @@ impl LeafPage {
 
     pub fn bulk_append(&mut self, vectors: &[u8], ids: &[VecId]) -> Result<Vec<RecordID>> {
         let vector_count = ids.len();
-        assert!(vectors.len() % self.vector_unit_size == 0);
         assert!(vector_count * self.vector_unit_size == vectors.len());
 
-        if self.current_vectors + vectors.len() > self.vector_data.len() {
+        if self.current_vectors * self.vector_unit_size + vectors.len() > self.vector_data.len() {
             bail!("not enough space");
         }
 
@@ -195,8 +209,20 @@ fn test_persist_load() {
     fs::remove_file("test_page.bin").unwrap();
 }
 
+#[test]
+fn test_iterator() {
+    let mut page = LeafPage::new(0, 10, 4);
+    let vectors = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+    let ids = vec![0, 1];
+    let _ = page.bulk_append(&vectors, &ids);
+    let mut iter = page.to_zip_iter();
+    assert_eq!(iter.next(), Some((0_usize, &[1_u8, 2, 3, 4][..])));
+    assert_eq!(iter.next(), Some((1_usize, &[5_u8, 6, 7, 8][..])));
+    assert_eq!(iter.next(), None);
+}
+
 #[derive(Clone, Debug, Default)]
-pub struct PageMetadata {
+pub struct FrameMetadata {
     /// How often the page is accessed.
     temperature: f32,
     /// How many times the page is pinned. pinned page will not be evicted.
@@ -223,7 +249,7 @@ pub struct BufferPool {
     /// list of free page frame ids.
     free_frames: Vec<usize>,
     /// page frame id to page frame metadata.
-    metadata: HashMap<usize, PageMetadata>,
+    metadata: HashMap<usize, FrameMetadata>,
 }
 
 impl BufferPool {
@@ -236,7 +262,7 @@ impl BufferPool {
     ) -> BufferPool {
         let page_storage = {
             let mut v = Vec::new();
-            let max_vectors = (page_size - 32) / (vector_unit_size + 8);
+            let max_vectors = LeafPage::calculate_max_vectors(page_size, vector_unit_size);
             v.resize(pool_size, LeafPage::new(0, max_vectors, vector_unit_size));
             v
         };
@@ -261,13 +287,12 @@ impl BufferPool {
 
     pub fn read_page(&self, page_id: usize) -> Result<LeafPage> {
         let file_size = self.backed_file.metadata()?.len();
-        if file_size < (self.page_size * page_id).try_into().unwrap() {
+        let seek_position = (ShmIndex::METADATA_LENGTH + page_id * self.page_size) as u64;
+        if file_size < seek_position {
             bail!("page id exceed disk file limit");
         }
         let mut f = File::open(&self.backed_file)?;
-        f.seek(std::io::SeekFrom::Start(
-            (page_id * self.page_size).try_into().unwrap(),
-        ))?;
+        f.seek(std::io::SeekFrom::Start(seek_position))?;
         let page = LeafPage::from_file(&mut f)?;
         Ok(page)
     }
@@ -427,7 +452,8 @@ impl BufferPool {
             let page = self.read_page(page_id).unwrap();
             self.page_storage[free_frame_id] = page;
             self.page_table.insert(page_id, free_frame_id);
-            self.metadata.insert(free_frame_id, PageMetadata::default());
+            self.metadata
+                .insert(free_frame_id, FrameMetadata::default());
             return LeafPageGuard::new(page_id, free_frame_id, self);
         }
         panic!("no free page");
@@ -443,7 +469,7 @@ impl BufferPool {
             let page = LeafPage::new(page_id, max_vectors, self.vector_unit_size);
             self.page_storage[frame_id] = page;
             self.page_table.insert(page_id, frame_id);
-            self.metadata.insert(frame_id, PageMetadata::default());
+            self.metadata.insert(frame_id, FrameMetadata::default());
             return page_id;
         }
         panic!("no free page");
@@ -637,12 +663,12 @@ mod tests {
             vector_unit_size: 4,
         })
         .unwrap();
-        let vector = vec![1u8, 2, 3, 4];
+        let vector = 4.0_f32.to_le_bytes();
         let id = index.insert(&vector, 0).unwrap();
         println!("inserted rid: {:?}", id);
         assert_eq!(id.page_id, 0);
         assert_eq!(id.page_offset, 0);
-        let target_vector = vec![1u8, 2, 3, 4];
+        let target_vector = 4.0_f32.to_le_bytes();
         let topk = index.query(&target_vector).unwrap();
         println!("topk: {:?}", topk.get_topk());
     }
