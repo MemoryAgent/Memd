@@ -7,6 +7,5 @@ CREATE TABLE internal_vector_index (
 CREATE TABLE internal_vector_children (
 	parent_id INTEGER,
 	child_id INTEGER,
-	FOREIGN KEY(parent_id) REFERENCES internal_vector_index(id) ON DELETE CASCADE,
-	FOREIGN KEY(child_id) REFERENCES chunk(id) ON DELETE CASCADE
+	FOREIGN KEY(parent_id) REFERENCES internal_vector_index(id) ON DELETE CASCADE
 );

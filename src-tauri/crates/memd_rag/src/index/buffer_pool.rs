@@ -229,11 +229,13 @@ impl BufferPool {
     pub fn create_leaf_page(&mut self) -> usize {
         if let Some(frame_id) = self.claim_free_frame() {
             let page_id = self.backed_file.create_page().unwrap();
-            let frame = &mut self.frame_storage[frame_id * self.page_size..];
+            let frame =
+                &mut self.frame_storage[frame_id * self.page_size..(frame_id + 1) * self.page_size];
 
             create_leaf_page_from_buffer(&frame, page_id, self.vector_unit_size);
 
             self.prepare_page(page_id, frame_id);
+            self.mark_dirty(page_id);
             return page_id;
         }
         panic!("no free page");
@@ -242,11 +244,13 @@ impl BufferPool {
     pub fn create_internal_page(&mut self, parent: usize) -> usize {
         if let Some(frame_id) = self.claim_free_frame() {
             let page_id = self.backed_file.create_page().unwrap();
-            let frame = &mut self.frame_storage[frame_id * self.page_size..];
+            let frame =
+                &mut self.frame_storage[frame_id * self.page_size..(frame_id + 1) * self.page_size];
 
             create_internal_page_from_buffer(&frame, page_id, self.vector_unit_size, parent);
 
             self.prepare_page(page_id, frame_id);
+            self.mark_dirty(page_id);
             return page_id;
         }
         panic!("no free page");

@@ -47,7 +47,7 @@ pub struct Relation {
 }
 
 pub struct Store {
-    conn: Mutex<Connection>,
+    pub conn: Mutex<Connection>,
     text_index: usearch::Index,
     node_index: usearch::Index,
 }
@@ -63,7 +63,7 @@ fn insert_to_index(index: &usearch::Index, id: u64, embedding: &[f32]) -> Result
 
 impl Default for Store {
     fn default() -> Self {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open("test.db").unwrap();
         run_migrations(&mut conn).unwrap();
         let text_index = usearch::Index::new(&usearch::IndexOptions {
             dimensions: 384,

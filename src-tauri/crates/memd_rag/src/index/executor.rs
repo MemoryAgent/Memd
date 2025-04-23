@@ -1,7 +1,22 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-use super::{buffer_pool::BufferPool, index_file::IndexFile, page::RecordID};
+use crate::{
+    component::{
+        bert::encode_single_sentence,
+        database::{Chunk, Store},
+        deepseek::extract_answer,
+        llm::Llm,
+        LocalComponent,
+    },
+    method::cluster::cluster_by_kmeans,
+};
+
+use super::{
+    buffer_pool::BufferPool,
+    index_file::IndexFile,
+    page::{get_internal_reader_from_buffer, get_leaf_reader_from_buffer, RecordID},
+};
 
 #[derive(Clone, Debug)]
 pub struct TopKBuffer {
@@ -51,6 +66,101 @@ fn reinterpret_as_f32<'a>(slice: &'a [u8]) -> &'a [f32] {
     unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const f32, len) }
 }
 
+fn reinterpret_as_u8(slice: &[f32]) -> &[u8] {
+    assert!(slice.len() % std::mem::size_of::<f32>() == 0);
+    unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * 4) }
+}
+
+impl Llm {
+    fn get_summary_prompt(text: &[String]) -> String {
+        let mut prompt =
+            "Please summarize the following text, include as many details as possible:\n"
+                .to_string();
+        for (i, line) in text.iter().enumerate() {
+            prompt.push_str(&format!("{}: {}\n", i + 1, line));
+        }
+        prompt.push_str("Summary:");
+        prompt
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct InternalIndexEntry {
+    pub summary: String,
+    pub embedding: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct InternalIndexRow {
+    pub vec_id: usize,
+    pub summary: String,
+    pub embedding: Vec<f32>,
+}
+
+// sqlite functions
+fn insert_internal_index(
+    conn: &mut rusqlite::Connection,
+    index_entry: &InternalIndexEntry,
+) -> Result<InternalIndexRow> {
+    use crate::component::sqlite;
+    conn.query_row(
+        "INSERT INTO internal_vector_index (summary, embedding) VALUES (?, ?) RETURNING id",
+        (
+            &index_entry.summary,
+            &sqlite::to_binary_string(&index_entry.embedding),
+        ),
+        |row| {
+            let id: usize = row.get(0)?;
+            Ok(InternalIndexRow {
+                vec_id: id,
+                summary: index_entry.summary.clone(),
+                embedding: index_entry.embedding.clone(),
+            })
+        },
+    )
+    .with_context(|| {
+        format!(
+            "Failed to insert internal index entry: {}",
+            index_entry.summary
+        )
+    })
+}
+
+fn insert_internal_relationship(
+    conn: &mut rusqlite::Connection,
+    parent_id: usize,
+    child_id: i64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO internal_vector_children (parent_id, child_id) VALUES (?, ?)",
+        (parent_id, child_id),
+    )
+    .with_context(|| {
+        format!(
+            "Failed to insert internal index relationship: {} -> {}",
+            parent_id, child_id
+        )
+    })?;
+    Ok(())
+}
+
+// db operations
+
+impl Store {
+    pub fn insert_internal_index(
+        &mut self,
+        index_entry: &InternalIndexEntry,
+    ) -> Result<InternalIndexRow> {
+        let mut conn = self.conn.lock().unwrap();
+        insert_internal_index(&mut conn, index_entry)
+    }
+
+    pub fn insert_internal_relationship(&mut self, parent_id: usize, child_id: i64) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        insert_internal_relationship(&mut conn, parent_id, child_id)
+    }
+}
+
 pub struct ShmIndex {
     buffer_pool: BufferPool,
 }
@@ -84,6 +194,7 @@ impl ShmIndex {
             options.page_size,
             options.vector_unit_size,
         );
+
         Ok(Self { buffer_pool })
     }
 
@@ -102,6 +213,76 @@ impl ShmIndex {
         Ok(())
     }
 
+    pub fn bulk_build(&mut self, chunks: &[Chunk], local_comps: &mut LocalComponent) {
+        if chunks.len() < 2 {
+            return;
+        }
+
+        let embeddings: Vec<Vec<f32>> = chunks
+            .iter()
+            // TODO: optimiza this by slicing
+            .map(|chunk| chunk.content_vector.clone())
+            .collect();
+
+        // TODO: optimiza this data transfer?
+        // TODO: how to decide k? BIC
+        let cluster_labels = cluster_by_kmeans(&embeddings, 2);
+
+        // group chunks by cluster labels
+        let mut clusters: Vec<Vec<Chunk>> = vec![Vec::new(); 2];
+        for (i, label) in cluster_labels.iter().enumerate() {
+            clusters[*label].push(chunks[i].clone());
+        }
+
+        let internal_page_id = self.buffer_pool.create_internal_page(0);
+        let internal_page = self.buffer_pool.fetch_page(internal_page_id);
+        let mut internal_page_accessor = get_internal_reader_from_buffer(internal_page.get_page());
+
+        for cluster in clusters.iter() {
+            let texts: Vec<String> = cluster.iter().map(|chunk| chunk.content.clone()).collect();
+            let prompt = Llm::get_summary_prompt(&texts);
+            let summary_whole = local_comps.llm.complete(&prompt).unwrap();
+            let (_, summary) = extract_answer(&summary_whole);
+            let embedding =
+                encode_single_sentence(&summary, &mut local_comps.tokenizer, &local_comps.bert)
+                    .unwrap();
+            let index_entry = InternalIndexEntry {
+                summary: summary.to_string(),
+                embedding: embedding.to_vec1().unwrap(),
+            };
+            let index_row = local_comps
+                .store
+                .insert_internal_index(&index_entry)
+                .unwrap();
+
+            let leaf_page_id = self.buffer_pool.create_leaf_page();
+            let leaf_page = self.buffer_pool.fetch_page(leaf_page_id);
+            let mut leaf_page_accessor = get_leaf_reader_from_buffer(leaf_page.get_page());
+
+            internal_page_accessor
+                .append_record(
+                    index_row.vec_id,
+                    reinterpret_as_u8(&embedding.to_vec1().unwrap()),
+                    leaf_page_id,
+                )
+                .unwrap();
+
+            for chunk in cluster.iter() {
+                local_comps
+                    .store
+                    .insert_internal_relationship(index_row.vec_id, chunk.id)
+                    .unwrap();
+                leaf_page_accessor
+                    .append_record(
+                        chunk.id.try_into().unwrap(),
+                        reinterpret_as_u8(&chunk.content_vector),
+                    )
+                    .unwrap();
+            }
+        }
+        self.buffer_pool.flush_all();
+    }
+
     /// insert one vector into the index
     pub fn insert(&mut self, vector_data: &[u8], vector_id: usize) -> Result<RecordID> {
         todo!()
@@ -112,8 +293,16 @@ impl ShmIndex {
     }
 }
 
+impl Drop for ShmIndex {
+    fn drop(&mut self) {
+        self.persist().unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::component::operation;
+
     use super::*;
     use std::path::PathBuf;
 
@@ -134,5 +323,56 @@ mod tests {
         let target_vector = 4.0_f32.to_le_bytes();
         let topk = index.query(&target_vector).unwrap();
         println!("topk: {:?}", topk.get_topk());
+    }
+
+    #[test]
+    fn test_bulk_build() {
+        let mut index = ShmIndex::new(ShmIndexOptions {
+            backed_file: PathBuf::from("test_bulk_build.bin"),
+            pool_size: 10,
+            page_size: 4096,
+            vector_unit_size: 4 * 384,
+        })
+        .unwrap();
+        let mut local_comps = LocalComponent::default();
+
+        let full_text = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        let inserted_full_text = local_comps
+            .store
+            .add_document(&operation::Document {
+                name: "hi".to_string(),
+                content: full_text.to_string(),
+            })
+            .unwrap();
+
+        let text = vec![
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        ];
+
+        let chunks: Vec<Chunk> = text
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                let embedding =
+                    encode_single_sentence(text, &mut local_comps.tokenizer, &local_comps.bert)
+                        .unwrap();
+                operation::Chunk {
+                    full_doc_id: inserted_full_text.id,
+                    chunk_index: 0,
+                    tokens: 20,
+                    content: text.clone(),
+                    embedding,
+                }
+            })
+            .map(|chunk| local_comps.store.add_chunk(&chunk).unwrap())
+            .collect();
+
+        index.bulk_build(&chunks, &mut local_comps);
+
+        index.persist().unwrap();
     }
 }

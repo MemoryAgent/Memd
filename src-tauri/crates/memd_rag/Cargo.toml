@@ -31,6 +31,9 @@ rusqlite = { version = "0.31.0", features = ["blob", "bundled"] }
 refinery = { version = "0.8.14", features = ["rusqlite"] }
 usearch = "2.17.2"
 petgraph = "0.7.1"
+linfa-clustering = "0.7.1"
+linfa = "0.7.1"
+ndarray = "0.15.0"
 
 # Local LLM, cross compile not work correctly in Android now...
 [target.'cfg(not(target_os = "android"))'.dependencies]

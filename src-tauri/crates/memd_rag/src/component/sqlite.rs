@@ -67,7 +67,7 @@ fn test_insert_query_document() {
     assert_eq!(doc.doc_name, "test");
 }
 
-fn to_binary_string(v: &Vec<f32>) -> Vec<u8> {
+pub fn to_binary_string(v: &Vec<f32>) -> Vec<u8> {
     let mut res = Vec::with_capacity(v.len() * 4);
     for x in v {
         res.extend_from_slice(&x.to_le_bytes());
@@ -75,7 +75,7 @@ fn to_binary_string(v: &Vec<f32>) -> Vec<u8> {
     res
 }
 
-fn to_f32(bytes: &Vec<u8>) -> Vec<f32> {
+pub fn to_f32(bytes: &Vec<u8>) -> Vec<f32> {
     let mut res = Vec::with_capacity(bytes.len() / 4);
     for i in 0..bytes.len() / 4 {
         let mut buf = [0u8; 4];

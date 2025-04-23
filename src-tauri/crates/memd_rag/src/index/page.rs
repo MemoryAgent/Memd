@@ -10,6 +10,7 @@
 //!
 //! Internal page
 //! | vector unit size (usize) | max vectors (usize) | current vectors (usize) |
+//! TODO: not parent page id. parent record ID or parent vec id?
 //! | parent page id (usize) |
 //! | vector data (u8) | vector ids (usize) | page ids (usize) |
 //!
@@ -174,6 +175,7 @@ impl<T: PageDescriptor> PageAccessor<T> {
     }
 
     fn write_usize(&mut self, offset: usize, value: usize) -> Result<()> {
+        // FIXME: why 8192 ????
         assert!(offset + PAGE_ID_SIZE <= self.page_size);
         // SAFETY: PageReader is within the bufferpool.
         unsafe {
@@ -422,7 +424,7 @@ impl PageAccessor<InternalPageDescriptor> {
         page_id: usize,
     ) -> Result<()> {
         assert!(idx < self.read_max_vectors());
-        assert!(data.len() == self.read_vector_unit_size());
+        assert_eq!(data.len(), self.read_vector_unit_size());
         self.write_vector_id(idx, id)?;
         self.write_vector_data(idx, data)?;
         self.write_child_page_id(idx, page_id)
