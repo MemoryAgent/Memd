@@ -1,5 +1,4 @@
 use linfa::prelude::*;
-use linfa_clustering::Dbscan;
 use linfa_clustering::GaussianMixtureModel;
 use linfa_clustering::KMeans;
 use ndarray::{Array1, Array2};

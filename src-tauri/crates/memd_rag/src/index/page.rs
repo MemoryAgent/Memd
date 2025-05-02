@@ -128,6 +128,7 @@ pub struct InternalPageDescriptor;
 impl PageDescriptor for LeafPageDescriptor {}
 impl PageDescriptor for InternalPageDescriptor {}
 
+/// The purpose of PageAccessor is to provide a type safe way to access the page data.
 pub struct PageAccessor<T: PageDescriptor> {
     page_data: *mut u8,
     page_size: usize,
@@ -175,7 +176,6 @@ impl<T: PageDescriptor> PageAccessor<T> {
     }
 
     fn write_usize(&mut self, offset: usize, value: usize) -> Result<()> {
-        // FIXME: why 8192 ????
         assert!(offset + PAGE_ID_SIZE <= self.page_size);
         // SAFETY: PageReader is within the bufferpool.
         unsafe {

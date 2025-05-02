@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fs::remove_file};
 
 use crate::index::page::{create_internal_page_from_buffer, create_leaf_page_from_buffer};
 
@@ -216,7 +216,7 @@ impl BufferPool {
         if let Some(frame_id) = self.page_table.get(&page_id) {
             return PageGuard::new(page_id, *frame_id, self);
         }
-        if let Some(free_frame_id) = self.free_frames.pop() {
+        if let Some(free_frame_id) = self.claim_free_frame() {
             let offset = free_frame_id * self.page_size;
             let mut frame = &mut self.frame_storage[offset..offset + self.page_size];
             self.backed_file.read_page(page_id, &mut frame).unwrap();
@@ -255,15 +255,103 @@ impl BufferPool {
         }
         panic!("no free page");
     }
+
+    pub fn print_status(&self) {
+        println!("Buffer pool status:");
+        println!("Page size: {}", self.page_size);
+        println!("Vector unit size: {}", self.vector_unit_size);
+        println!("Memory usage: {}", self.memory_usage());
+        println!("Free frames: {:?}", self.free_frames);
+        // line separate page table
+        println!("Page table:");
+
+        for (page_id, frame_id) in &self.page_table {
+            println!("    {} -> {}", page_id, frame_id);
+        }
+
+        println!("Metadata:");
+
+        for (frame_id, metadata) in &self.metadata {
+            println!(
+                "    Frame {}: temperature: {}, pin count: {}, dirty: {}",
+                frame_id, metadata.temperature, metadata.pin_count, metadata.dirty
+            );
+        }
+
+        println!("");
+    }
 }
 
-#[test]
-fn bufferpool_new() {
-    let backed_file = IndexFile::create("test.bin", 4096, 4).unwrap();
-    let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
-    assert_eq!(buffer_pool.page_size, 4096);
-    assert_eq!(buffer_pool.vector_unit_size, 4);
-    assert_eq!(buffer_pool.frame_storage.capacity(), 10 * 4096);
-    assert_eq!(buffer_pool.free_frames.len(), 10);
-    buffer_pool.flush_all();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bufferpool_new() {
+        let backed_file = IndexFile::create("test.bin", 4096, 4).unwrap();
+        let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
+        assert_eq!(buffer_pool.page_size, 4096);
+        assert_eq!(buffer_pool.vector_unit_size, 4);
+        assert_eq!(buffer_pool.frame_storage.capacity(), 10 * 4096);
+        assert_eq!(buffer_pool.free_frames.len(), 10);
+        buffer_pool.flush_all();
+    }
+
+    #[test]
+    fn buffer_pool_print_status_with_pages() {
+        let backed_file = IndexFile::create("test.bin", 4096, 4).unwrap();
+        let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
+        let _l = buffer_pool.create_leaf_page();
+        buffer_pool.print_status();
+        buffer_pool.flush_all();
+        remove_file("test.bin").unwrap();
+    }
+
+    #[test]
+    fn buffer_pool_raii_status() {
+        let backed_file = IndexFile::create("test.bin", 4096, 4).unwrap();
+        let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
+        let page_id = buffer_pool.create_leaf_page();
+        {
+            let _guard = buffer_pool.fetch_page(page_id);
+            buffer_pool.print_status();
+        }
+        {
+            let _guard = buffer_pool.fetch_page(page_id);
+            buffer_pool.print_status();
+        }
+        {
+            let _guard = buffer_pool.fetch_page(page_id);
+            let _guard2 = buffer_pool.fetch_page(page_id);
+            buffer_pool.print_status();
+        }
+        buffer_pool.flush_all();
+        buffer_pool.print_status();
+        remove_file("test.bin").unwrap();
+    }
+
+    #[test]
+    fn buffer_pool_evict() {
+        let backed_file = IndexFile::create("test.bin", 4096, 4).unwrap();
+        let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
+        for _ in 0..10 {
+            buffer_pool.create_leaf_page();
+        }
+
+        let _guards = (1..10)
+            .map(|id| buffer_pool.fetch_page(id))
+            .collect::<Vec<_>>();
+
+        buffer_pool.print_status();
+
+        let _guard = buffer_pool.create_internal_page(0);
+
+        buffer_pool.print_status();
+
+        let _guard2 = buffer_pool.fetch_page(0);
+
+        buffer_pool.print_status();
+
+        remove_file("test.bin").unwrap();
+    }
 }
