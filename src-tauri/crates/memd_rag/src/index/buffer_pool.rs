@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use std::{collections::HashMap, fs::remove_file};
+use std::collections::HashMap;
 
 use crate::index::page::{create_internal_page_from_buffer, create_leaf_page_from_buffer};
 
@@ -285,10 +285,17 @@ impl BufferPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::remove_file;
 
     #[test]
     fn bufferpool_new() {
-        let backed_file = IndexFile::create("test.bin", 4096, 4).unwrap();
+        let backed_file = IndexFile::create(
+            "test.bin",
+            4096,
+            4,
+            crate::index::executor::SummaryMethod::GMMCentroid,
+        )
+        .unwrap();
         let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
         assert_eq!(buffer_pool.page_size, 4096);
         assert_eq!(buffer_pool.vector_unit_size, 4);
@@ -299,7 +306,13 @@ mod tests {
 
     #[test]
     fn buffer_pool_print_status_with_pages() {
-        let backed_file = IndexFile::create("test.bin", 4096, 4).unwrap();
+        let backed_file = IndexFile::create(
+            "test.bin",
+            4096,
+            4,
+            crate::index::executor::SummaryMethod::GMMCentroid,
+        )
+        .unwrap();
         let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
         let _l = buffer_pool.create_leaf_page();
         buffer_pool.print_status();
@@ -309,7 +322,13 @@ mod tests {
 
     #[test]
     fn buffer_pool_raii_status() {
-        let backed_file = IndexFile::create("test.bin", 4096, 4).unwrap();
+        let backed_file = IndexFile::create(
+            "test.bin",
+            4096,
+            4,
+            crate::index::executor::SummaryMethod::GMMCentroid,
+        )
+        .unwrap();
         let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
         let page_id = buffer_pool.create_leaf_page();
         {
@@ -332,7 +351,13 @@ mod tests {
 
     #[test]
     fn buffer_pool_evict() {
-        let backed_file = IndexFile::create("test.bin", 4096, 4).unwrap();
+        let backed_file = IndexFile::create(
+            "test.bin",
+            4096,
+            4,
+            crate::index::executor::SummaryMethod::GMMCentroid,
+        )
+        .unwrap();
         let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
         for _ in 0..10 {
             buffer_pool.create_leaf_page();

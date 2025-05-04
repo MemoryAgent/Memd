@@ -84,12 +84,14 @@ impl Llm {
     }
 }
 
+// For a internal index, we need to store the summary and its embedding.
 #[derive(Clone, Debug)]
 pub struct InternalIndexEntry {
     pub summary: String,
     pub embedding: Vec<f32>,
 }
 
+// The database assigns vec_id after insertion.
 #[derive(Clone, Debug)]
 pub struct InternalIndexRow {
     pub vec_id: usize,
@@ -161,9 +163,21 @@ impl Store {
     }
 }
 
+/// LLM method uses large language model to summarize the text.
+///
+/// Centroid method does not summarize the text, but uses the centroid of vectors as the embedding
+/// of internal index.
+#[derive(Clone, Copy, Debug)]
+pub enum SummaryMethod {
+    LLM,
+    GMMCentroid,
+    KMeansCentroid,
+}
+
 pub struct ShmIndex {
     buffer_pool: BufferPool,
     max_page_vectors: usize,
+    summary_method: SummaryMethod,
 }
 
 #[derive(Clone, Debug)]
@@ -176,6 +190,7 @@ pub struct ShmIndexOptions {
     pub page_size: usize,
     /// The size of each vector unit.
     pub vector_unit_size: usize,
+    pub summary_method: SummaryMethod,
 }
 
 #[derive(Clone, Debug)]
@@ -192,7 +207,9 @@ impl ShmIndex {
             options.backed_file,
             options.page_size,
             options.vector_unit_size,
+            options.summary_method,
         )?;
+
         let buffer_pool = BufferPool::new(
             backed_file,
             options.pool_size,
@@ -208,6 +225,7 @@ impl ShmIndex {
         Ok(Self {
             buffer_pool,
             max_page_vectors,
+            summary_method: options.summary_method,
         })
     }
 
@@ -215,6 +233,7 @@ impl ShmIndex {
         let backed_file = IndexFile::open(file)?;
         let page_size = backed_file.page_size;
         let vector_unit_size = backed_file.vector_unit_size;
+        let summary_method = backed_file.summary_method;
 
         let buffer_pool = BufferPool::new(backed_file, pool_size, page_size, vector_unit_size);
 
@@ -224,6 +243,7 @@ impl ShmIndex {
         Ok(Self {
             buffer_pool,
             max_page_vectors,
+            summary_method,
         })
     }
 
@@ -231,6 +251,8 @@ impl ShmIndex {
         self.buffer_pool.flush_all();
         Ok(())
     }
+
+    // TODO: bulk build without LLM summary.
 
     // assume chunks is needed to split
     // every call into this function will build upper one level node
@@ -249,11 +271,11 @@ impl ShmIndex {
 
         let num_clusters = chunks.len() / 2;
 
-        let cluster_labels = cluster_by_kmeans(&embeddings, num_clusters);
+        let cluster_result = cluster_by_kmeans(&embeddings, num_clusters);
 
         let mut clusters: Vec<Vec<InternalChunk>> = vec![Vec::new(); num_clusters];
 
-        for (i, label) in cluster_labels.iter().enumerate() {
+        for (i, label) in cluster_result.cluster_labels.iter().enumerate() {
             clusters[*label].push(chunks[i].clone());
         }
 
@@ -316,11 +338,11 @@ impl ShmIndex {
 
         // TODO: optimiza this data transfer?
         // TODO: how to decide k? BIC
-        let cluster_labels = cluster_by_kmeans(&embeddings, chunks.len() / 2);
+        let cluster_result = cluster_by_kmeans(&embeddings, chunks.len() / 2);
 
         // group chunks by cluster labels
         let mut clusters: Vec<Vec<Chunk>> = vec![Vec::new(); chunks.len() / 2];
-        for (i, label) in cluster_labels.iter().enumerate() {
+        for (i, label) in cluster_result.cluster_labels.iter().enumerate() {
             clusters[*label].push(chunks[i].clone());
         }
 
@@ -421,6 +443,7 @@ mod tests {
             pool_size: 10,
             page_size: 4096,
             vector_unit_size: 4,
+            summary_method: SummaryMethod::GMMCentroid,
         })
         .unwrap();
         let vector = 4.0_f32.to_le_bytes();
@@ -440,6 +463,7 @@ mod tests {
             pool_size: 10,
             page_size: 4096,
             vector_unit_size: 4 * 384,
+            summary_method: SummaryMethod::GMMCentroid,
         })
         .unwrap();
         let mut local_comps = LocalComponent::default();
@@ -491,6 +515,7 @@ mod tests {
             pool_size: 10,
             page_size: 4096,
             vector_unit_size: 4 * 384,
+            summary_method: SummaryMethod::GMMCentroid,
         })
         .unwrap();
         let mut local_comps = LocalComponent::default();

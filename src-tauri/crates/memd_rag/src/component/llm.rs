@@ -154,7 +154,7 @@ impl Llm {
     }
 
     pub fn complete(&self, prompt: &str) -> Result<String> {
-        let template = self.model.get_chat_template()?;
+        let template = self.model.chat_template(None)?;
         let augmented_prompt = self.model.apply_chat_template(
             &template,
             &vec![LlamaChatMessage::new(
