@@ -170,14 +170,23 @@ impl Store {
 #[derive(Clone, Copy, Debug)]
 pub enum SummaryMethod {
     LLM,
-    GMMCentroid,
-    KMeansCentroid,
+    Centroid,
+}
+
+/// We could use two methods for clustering...
+///
+/// RAPTORS uses GMM, while Quake uses K-means
+#[derive(Clone, Copy, Debug)]
+pub enum ClusterMethod {
+    GMM,
+    KMeans,
 }
 
 pub struct ShmIndex {
     buffer_pool: BufferPool,
     max_page_vectors: usize,
     summary_method: SummaryMethod,
+    cluster_method: ClusterMethod,
 }
 
 #[derive(Clone, Debug)]
@@ -191,6 +200,7 @@ pub struct ShmIndexOptions {
     /// The size of each vector unit.
     pub vector_unit_size: usize,
     pub summary_method: SummaryMethod,
+    pub cluster_method: ClusterMethod,
 }
 
 #[derive(Clone, Debug)]
@@ -202,12 +212,22 @@ pub struct InternalChunk {
 }
 
 impl ShmIndex {
+
+    /// The root page is 0 by default. If all vectors can reside in one page, then the root page
+    /// is a leaf page, and the vector index simply traverse this page to find top-k vectors.
+    /// 
+    /// Otherwise, in bulk insertion stage, if the size of embedding vectors exceeds a whole page,
+    /// it is divided into many many clusters. These clusters are built to a hierarchy, whose final
+    /// internal page is the root page.
+    const ROOT_PAGE_ID: usize = 0;
+
     pub fn new(options: ShmIndexOptions) -> Result<Self> {
         let backed_file = IndexFile::create(
             options.backed_file,
             options.page_size,
             options.vector_unit_size,
             options.summary_method,
+            options.cluster_method,
         )?;
 
         let buffer_pool = BufferPool::new(
@@ -226,6 +246,7 @@ impl ShmIndex {
             buffer_pool,
             max_page_vectors,
             summary_method: options.summary_method,
+            cluster_method: options.cluster_method,
         })
     }
 
@@ -234,6 +255,7 @@ impl ShmIndex {
         let page_size = backed_file.page_size;
         let vector_unit_size = backed_file.vector_unit_size;
         let summary_method = backed_file.summary_method;
+        let cluster_method = backed_file.cluster_method;
 
         let buffer_pool = BufferPool::new(backed_file, pool_size, page_size, vector_unit_size);
 
@@ -244,6 +266,7 @@ impl ShmIndex {
             buffer_pool,
             max_page_vectors,
             summary_method,
+            cluster_method,
         })
     }
 
@@ -266,8 +289,8 @@ impl ShmIndex {
             return chunks.to_vec();
         }
 
-        let embeddings: Vec<Vec<f32>> =
-            chunks.iter().map(|chunk| chunk.embedding.clone()).collect();
+        let embeddings: Vec<&[f32]> =
+            chunks.iter().map(|chunk| chunk.embedding.as_slice()).collect();
 
         let num_clusters = chunks.len() / 2;
 
@@ -330,14 +353,23 @@ impl ShmIndex {
     }
 
     pub fn bulk_build(&mut self, chunks: &[Chunk], local_comps: &mut LocalComponent) {
-        let embeddings: Vec<Vec<f32>> = chunks
+        // scenario one: one page can store all vectors
+        if chunks.len() < self.max_page_vectors {
+            let leaf_page_id = self.buffer_pool.create_leaf_page();
+            assert_eq!(leaf_page_id, Self::ROOT_PAGE_ID);
+            
+        }
+
+        let embeddings: Vec<&[f32]> = chunks
             .iter()
-            // TODO: optimiza this by slicing
-            .map(|chunk| chunk.content_vector.clone())
+            .map(|chunk| chunk.content_vector.as_slice())
             .collect();
 
-        // TODO: optimiza this data transfer?
-        // TODO: how to decide k? BIC
+        let cluster_result = match self.cluster_method {
+            ClusterMethod::GMM => cluster,
+            ClusterMethod::KMeans => todo!(),
+        };
+
         let cluster_result = cluster_by_kmeans(&embeddings, chunks.len() / 2);
 
         // group chunks by cluster labels
@@ -443,7 +475,8 @@ mod tests {
             pool_size: 10,
             page_size: 4096,
             vector_unit_size: 4,
-            summary_method: SummaryMethod::GMMCentroid,
+            summary_method: SummaryMethod::Centroid,
+            cluster_method: ClusterMethod::KMeans,
         })
         .unwrap();
         let vector = 4.0_f32.to_le_bytes();
@@ -463,7 +496,8 @@ mod tests {
             pool_size: 10,
             page_size: 4096,
             vector_unit_size: 4 * 384,
-            summary_method: SummaryMethod::GMMCentroid,
+            summary_method: SummaryMethod::Centroid,
+            cluster_method: ClusterMethod::KMeans,
         })
         .unwrap();
         let mut local_comps = LocalComponent::default();
@@ -515,7 +549,8 @@ mod tests {
             pool_size: 10,
             page_size: 4096,
             vector_unit_size: 4 * 384,
-            summary_method: SummaryMethod::GMMCentroid,
+            summary_method: SummaryMethod::Centroid,
+            cluster_method: ClusterMethod::KMeans,
         })
         .unwrap();
         let mut local_comps = LocalComponent::default();

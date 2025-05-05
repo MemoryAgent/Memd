@@ -25,7 +25,7 @@ pub struct ClusterResult {
 
 /// The Quake paper uses balanced k-means for clustering.
 /// and let the K be $(the number of clusters) / \tau_s$
-pub fn cluster_by_kmeans(embeddings: &Vec<Vec<f32>>, k: usize) -> ClusterResult {
+pub fn cluster_by_kmeans(embeddings: &Vec<&[f32]>, k: usize) -> ClusterResult {
     let data = Array2::from_shape_vec((embeddings.len(), embeddings[0].len()), embeddings.concat());
 
     let dataset = DatasetBase::from(data.unwrap());
@@ -51,7 +51,7 @@ pub fn cluster_by_kmeans_slice(
 ) -> ClusterResult {
     let data = embeddings
         .chunks_exact(unit_vector_size)
-        .map(|chunk| chunk.to_vec())
+        .map(|chunk| chunk)
         .collect::<Vec<_>>();
 
     cluster_by_kmeans(&data, k)
@@ -73,7 +73,6 @@ fn gmm_standardize(samples: &Array2<f32>) -> Array2<f32> {
     let data_mean = samples.mean_axis(Axis(0)).unwrap();
     let data_std = samples.std_axis(Axis(0), 0.0);
     let standized_data = (samples - &data_mean) / &data_std;
-    info!("sample {} after standardize is {}", samples, standized_data);
     standized_data
 }
 
@@ -189,12 +188,14 @@ pub fn cluster_by_gmm_bic(
             + clusters as f32 * n_features as f32 * (n_features as f32 + 1.0) / 2.0
             + (clusters - 1) as f32;
 
+        let bic = n_params * n_samples.ln() - 2.0 * log_likelihood;
+
         info!(
-            "For splitting to {} clusters, the log likelihood is {}, params is {}, mean is {}, covariance is {}",
-            clusters, log_likelihood, n_params, model.means(), model.covariances()
+            "For splitting to {} clusters, the log likelihood is {}, params is {}, bic is {}.",
+            clusters, log_likelihood, n_params, bic
         );
 
-        (model, n_params * n_samples.ln() - 2.0 * log_likelihood)
+        (model, bic)
     };
 
     let mut cluster_and_scores = (min_clusters..=max_clusters)

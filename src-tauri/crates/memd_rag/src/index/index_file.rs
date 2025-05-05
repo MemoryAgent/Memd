@@ -10,7 +10,11 @@
 //!
 //! Maximum page id (usize)
 //!
+//! TODO: these two methods can use u8 to store, but the priority is low.
+//! 
 //! Summary method (usize)
+//! 
+//! Cluster method (usize)
 
 // constants
 
@@ -21,7 +25,10 @@ use std::{
     path::Path,
 };
 
-use super::{executor::SummaryMethod, page::read_page_id};
+use super::{
+    executor::{ClusterMethod, SummaryMethod},
+    page::read_page_id,
+};
 
 const MAGIC_HEADER: u64 = 0xDEADBEEFDEADBEEF;
 const MAGIC_HEADER_OFFSET: usize = 0;
@@ -39,7 +46,10 @@ const MAX_PAGE_ID_SIZE: usize = size_of::<usize>();
 const SUMMARY_METHOD_OFFSET: usize = MAX_PAGE_ID_OFFSET + MAX_PAGE_ID_SIZE;
 const SUMMARY_METHOD_SIZE: usize = size_of::<usize>();
 
-const DATA_OFFSET: usize = SUMMARY_METHOD_OFFSET + SUMMARY_METHOD_SIZE;
+const CLUSTER_METHOD_OFFSET: usize = SUMMARY_METHOD_OFFSET + SUMMARY_METHOD_SIZE;
+const CLUSTER_METHOD_SIZE: usize = size_of::<usize>();
+
+const DATA_OFFSET: usize = CLUSTER_METHOD_OFFSET + CLUSTER_METHOD_SIZE;
 
 pub struct IndexFile {
     // we don't need buffered writer because writes are batched to pages.
@@ -50,6 +60,7 @@ pub struct IndexFile {
     // the next page id to be allocated.
     pub max_page_id: usize,
     pub summary_method: SummaryMethod,
+    pub cluster_method: ClusterMethod,
 }
 
 fn write_u64(file: &mut File, offset: usize, value: u64) -> Result<()> {
@@ -73,17 +84,30 @@ fn write_slice(file: &mut File, offset: usize, data: &[u8]) -> Result<()> {
 fn summary_method_to_u64(method: SummaryMethod) -> u64 {
     match method {
         SummaryMethod::LLM => 0,
-        SummaryMethod::GMMCentroid => 1,
-        SummaryMethod::KMeansCentroid => 2,
+        SummaryMethod::Centroid => 1,
     }
 }
 
 fn u64_to_summary_method(value: u64) -> Result<SummaryMethod> {
     match value {
         0 => Ok(SummaryMethod::LLM),
-        1 => Ok(SummaryMethod::GMMCentroid),
-        2 => Ok(SummaryMethod::KMeansCentroid),
+        1 => Ok(SummaryMethod::Centroid),
         _ => bail!("Invalid summary method value: {}", value),
+    }
+}
+
+fn cluster_method_to_u64(method: ClusterMethod) -> u64 {
+    match method {
+        ClusterMethod::GMM => 0,
+        ClusterMethod::KMeans => 1,
+    }
+}
+
+fn u64_to_cluster_method(value: u64) -> Result<ClusterMethod> {
+    match value {
+        0 => Ok(ClusterMethod::GMM),
+        1 => Ok(ClusterMethod::KMeans),
+        _ => bail!("Invalid clustering method value: {}", value),
     }
 }
 
@@ -101,6 +125,11 @@ impl IndexFile {
             &mut self.file,
             SUMMARY_METHOD_OFFSET,
             summary_method_to_u64(self.summary_method),
+        )?;
+        write_u64(
+            &mut self.file,
+            CLUSTER_METHOD_OFFSET,
+            cluster_method_to_u64(self.cluster_method),
         )?;
         Ok(())
     }
@@ -120,6 +149,7 @@ impl IndexFile {
         page_size: usize,
         vector_unit_size: usize,
         summary_method: SummaryMethod,
+        cluster_method: ClusterMethod,
     ) -> Result<Self> {
         let file = File::create_new(path)?;
         let mut index_file = IndexFile {
@@ -128,6 +158,7 @@ impl IndexFile {
             vector_unit_size,
             max_page_id: 0,
             summary_method,
+            cluster_method,
         };
         index_file.write_header()?;
         Ok(index_file)
@@ -166,6 +197,8 @@ impl IndexFile {
         let max_page_id = Self::read_usize(&mut file, MAX_PAGE_ID_OFFSET)?;
         let summary_method =
             u64_to_summary_method(Self::read_u64(&mut file, SUMMARY_METHOD_OFFSET)?)?;
+        let cluster_method =
+            u64_to_cluster_method(Self::read_u64(&mut file, CLUSTER_METHOD_OFFSET)?)?;
 
         Ok(IndexFile {
             file,
@@ -173,6 +206,7 @@ impl IndexFile {
             vector_unit_size,
             max_page_id,
             summary_method,
+            cluster_method,
         })
     }
 
@@ -180,6 +214,8 @@ impl IndexFile {
         println!("Page size: {}", self.page_size);
         println!("Vector unit size: {}", self.vector_unit_size);
         println!("Max page id: {}", self.max_page_id);
+        println!("Summary method: {:?}", self.summary_method);
+        println!("Cluster method: {:?}", self.cluster_method);
     }
 
     pub fn read_page(&mut self, page_id: usize, buf: &mut [u8]) -> Result<()> {
@@ -219,7 +255,8 @@ fn test_index_file() {
         path,
         page_size,
         vector_unit_size,
-        SummaryMethod::GMMCentroid,
+        SummaryMethod::Centroid,
+        ClusterMethod::KMeans,
     )
     .unwrap();
     index_file.print_metadata();

@@ -293,7 +293,8 @@ mod tests {
             "test.bin",
             4096,
             4,
-            crate::index::executor::SummaryMethod::GMMCentroid,
+            crate::index::executor::SummaryMethod::Centroid,
+            crate::index::executor::ClusterMethod::KMeans,
         )
         .unwrap();
         let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
@@ -310,7 +311,8 @@ mod tests {
             "test.bin",
             4096,
             4,
-            crate::index::executor::SummaryMethod::GMMCentroid,
+            crate::index::executor::SummaryMethod::Centroid,
+            crate::index::executor::ClusterMethod::KMeans,
         )
         .unwrap();
         let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
@@ -326,7 +328,8 @@ mod tests {
             "test.bin",
             4096,
             4,
-            crate::index::executor::SummaryMethod::GMMCentroid,
+            crate::index::executor::SummaryMethod::Centroid,
+            crate::index::executor::ClusterMethod::KMeans,
         )
         .unwrap();
         let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
@@ -355,7 +358,8 @@ mod tests {
             "test.bin",
             4096,
             4,
-            crate::index::executor::SummaryMethod::GMMCentroid,
+            crate::index::executor::SummaryMethod::Centroid,
+            crate::index::executor::ClusterMethod::KMeans,
         )
         .unwrap();
         let mut buffer_pool = BufferPool::new(backed_file, 10, 4096, 4);
