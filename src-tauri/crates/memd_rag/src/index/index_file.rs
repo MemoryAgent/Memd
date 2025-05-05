@@ -101,7 +101,7 @@ impl IndexFile {
             &mut self.file,
             SUMMARY_METHOD_OFFSET,
             summary_method_to_u64(self.summary_method),
-        );
+        )?;
         Ok(())
     }
 

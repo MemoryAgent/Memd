@@ -11,6 +11,7 @@ use ndarray::Array3;
 use ndarray::Axis;
 use ndarray::Zip;
 use ndarray::{Array1, Array2};
+use tracing::info;
 
 /// For every clustering, we need to store the cluster labels and the centroids.
 ///
@@ -67,6 +68,15 @@ fn test_cluster_by_kmeans() {
     println!("Cluster labels: {:?}", cluster_labels);
 }
 
+/// transform gmm to [0, 1] to improve numerical stability.
+fn gmm_standardize(samples: &Array2<f32>) -> Array2<f32> {
+    let data_mean = samples.mean_axis(Axis(0)).unwrap();
+    let data_std = samples.std_axis(Axis(0), 0.0);
+    let standized_data = (samples - &data_mean) / &data_std;
+    info!("sample {} after standardize is {}", samples, standized_data);
+    standized_data
+}
+
 fn compute_precisions_cholesky_full(covariances: &Array3<f32>) -> Result<Array3<f32>> {
     let n_clusters = covariances.shape()[0];
     let n_features = covariances.shape()[1];
@@ -92,6 +102,10 @@ fn compute_log_det_cholesky_full(matrix_chol: &Array3<f32>, n_features: usize) -
         .to_owned()
         .mapv(|x| x.ln());
     log_diags.sum_axis(Axis(1))
+}
+
+fn estimate_log_weights(gmm: &GaussianMixtureModel<f32>) -> Array1<f32> {
+    gmm.weights().mapv(|x| x.ln())
 }
 
 fn estimate_log_gaussian_prob(
@@ -120,7 +134,27 @@ fn estimate_log_gaussian_prob(
     let log_gaussian = log_prob
         .mapv(|v| -0.5 * (v + n_features as f32 * f32::ln(2. * std::f32::consts::PI)))
         + log_det;
-    Ok(log_gaussian)
+
+    let log_weights = estimate_log_weights(gmm);
+
+    Ok(log_gaussian + log_weights)
+}
+
+pub fn score_samples(model: &GaussianMixtureModel<f32>, observations: &Array2<f32>) -> Array1<f32> {
+    let weighted_log_probs = estimate_log_gaussian_prob(&model, &observations).unwrap();
+
+    weighted_log_probs.map_axis(Axis(1), |row| {
+        let max_val = row.fold(f32::NEG_INFINITY, |acc, &x| acc.max(x));
+        let sum_exp = row.iter().map(|&x| (x - max_val).exp()).sum::<f32>().ln();
+        max_val + sum_exp
+    })
+}
+
+pub fn calculate_log_likelihood_score(
+    model: &GaussianMixtureModel<f32>,
+    observations: &Array2<f32>,
+) -> f32 {
+    score_samples(model, observations).sum()
 }
 
 pub fn cluster_by_gmm_bic(
@@ -128,15 +162,20 @@ pub fn cluster_by_gmm_bic(
     min_clusters: usize,
     max_clusters: usize,
 ) -> ClusterResult {
-    let data = Array2::from_shape_vec((embeddings.len(), embeddings[0].len()), embeddings.concat())
-        .unwrap();
+    let raw_data =
+        Array2::from_shape_vec((embeddings.len(), embeddings[0].len()), embeddings.concat())
+            .unwrap();
+
+    let data = gmm_standardize(&raw_data);
 
     let dataset = DatasetBase::from(data.clone());
 
     let calculate_gauss_bic = |clusters: usize| -> (GaussianMixtureModel<f32>, f32) {
         let model: GaussianMixtureModel<f32> = GaussianMixtureModel::params(clusters)
-            .max_n_iterations(10)
-            .tolerance(1e-5)
+            .max_n_iterations(100)
+            .init_method(linfa_clustering::GmmInitMethod::KMeans)
+            .reg_covariance(1e-1)
+            .tolerance(1e-1)
             .fit(&dataset)
             .unwrap();
 
@@ -144,13 +183,16 @@ pub fn cluster_by_gmm_bic(
         let n_features = data.ncols();
 
         let observations = &dataset.records;
-        let log_likelihood = estimate_log_gaussian_prob(&model, observations)
-            .unwrap()
-            .sum();
+        let log_likelihood = calculate_log_likelihood_score(&model, observations);
 
         let n_params = clusters as f32 * n_features as f32
             + clusters as f32 * n_features as f32 * (n_features as f32 + 1.0) / 2.0
             + (clusters - 1) as f32;
+
+        info!(
+            "For splitting to {} clusters, the log likelihood is {}, params is {}, mean is {}, covariance is {}",
+            clusters, log_likelihood, n_params, model.means(), model.covariances()
+        );
 
         (model, n_params * n_samples.ln() - 2.0 * log_likelihood)
     };
@@ -161,7 +203,7 @@ pub fn cluster_by_gmm_bic(
 
     cluster_and_scores.sort_by(|x, y| x.1 .1.total_cmp(&y.1 .1));
 
-    let best_gmm = &cluster_and_scores.last().unwrap().1 .0;
+    let best_gmm = &cluster_and_scores.first().unwrap().1 .0;
 
     let cluster_labels = best_gmm.predict(&dataset);
     let centroids = best_gmm.centroids().clone();
@@ -172,13 +214,28 @@ pub fn cluster_by_gmm_bic(
     }
 }
 
+pub fn cluster_by_gmm_bic_slice(
+    embeddings: &[f32],
+    unit_vector_size: usize,
+    min_clusters: usize,
+    max_clusters: usize,
+) -> ClusterResult {
+    let data = embeddings
+        .chunks_exact(unit_vector_size)
+        .map(|chunk| chunk.to_vec())
+        .collect::<Vec<_>>();
+
+    cluster_by_gmm_bic(&data, min_clusters, max_clusters)
+}
+
 pub fn cluster_by_gmm(embeddings: &Vec<Vec<f32>>, k: usize) -> ClusterResult {
     let data = Array2::from_shape_vec((embeddings.len(), embeddings[0].len()), embeddings.concat());
 
     let dataset = DatasetBase::from(data.unwrap());
     let gmm = GaussianMixtureModel::params(k)
-        .max_n_iterations(10)
-        .tolerance(1e-5)
+        .reg_covariance(1e-1)
+        .max_n_iterations(100)
+        .tolerance(1e-3)
         .fit(&dataset)
         .unwrap();
 
@@ -208,9 +265,22 @@ pub fn cluster_by_gmm_slice(
 fn test_cluster_by_gmm() {
     let embeddings = vec![0.0, 1.0, 2.0, 3.0, 40.0, 41.0];
     let unit_vector_size = 2;
-    let k = 2;
+    let k = 1;
 
     let cluster_labels = cluster_by_gmm_slice(&embeddings, unit_vector_size, k);
     assert_eq!(cluster_labels.cluster_labels.len(), 3);
     println!("Cluster labels: {:?}", cluster_labels);
+}
+
+#[test]
+fn test_cluster_by_gmm_bic() {
+    tracing_subscriber::fmt::init();
+
+    let embeddings = vec![
+        0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 39.0, 39.0, 40.0, 41.0, 43.0, 44.0,
+    ];
+    let unit_vector_size = 2;
+
+    let cluster_results = cluster_by_gmm_bic_slice(&embeddings, unit_vector_size, 1, 3);
+    println!("{:?}", cluster_results)
 }
