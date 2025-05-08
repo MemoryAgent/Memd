@@ -11,9 +11,9 @@
 //! Maximum page id (usize)
 //!
 //! TODO: these two methods can use u8 to store, but the priority is low.
-//! 
+//!
 //! Summary method (usize)
-//! 
+//!
 //! Cluster method (usize)
 
 // constants
@@ -100,6 +100,7 @@ fn cluster_method_to_u64(method: ClusterMethod) -> u64 {
     match method {
         ClusterMethod::GMM => 0,
         ClusterMethod::KMeans => 1,
+        ClusterMethod::NoCluster => 2,
     }
 }
 
@@ -107,6 +108,7 @@ fn u64_to_cluster_method(value: u64) -> Result<ClusterMethod> {
     match value {
         0 => Ok(ClusterMethod::GMM),
         1 => Ok(ClusterMethod::KMeans),
+        2 => Ok(ClusterMethod::NoCluster),
         _ => bail!("Invalid clustering method value: {}", value),
     }
 }

@@ -212,6 +212,7 @@ impl BufferPool {
         self.metadata.insert(frame_id, FrameMetadata::default());
     }
 
+    // TODO: error handling
     pub fn fetch_page(&mut self, page_id: usize) -> PageGuard {
         if let Some(frame_id) = self.page_table.get(&page_id) {
             return PageGuard::new(page_id, *frame_id, self);
