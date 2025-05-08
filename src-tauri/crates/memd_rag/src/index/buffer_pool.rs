@@ -19,7 +19,7 @@ pub struct FrameMetadata {
 /// Buffer pool swaps pages between memory and disk.
 pub struct BufferPool {
     /// Persistent file.
-    backed_file: IndexFile,
+    pub backed_file: IndexFile,
     /// Page size is fixed for whole buffer pool.
     page_size: usize,
     vector_unit_size: usize,

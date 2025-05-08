@@ -502,14 +502,14 @@ pub enum SummaryMethod {
 }
 
 /// We could use two methods for clustering...
+/// and there's also a option without clustering.
 ///
 /// RAPTORS uses GMM, while Quake uses K-means
-///
-/// TODO: add no cluster mode. all leaf.
 #[derive(Clone, Copy, Debug)]
 pub enum ClusterMethod {
     GMM,
     KMeans,
+    // If we use no cluster mode, the only work is to store all vectors in pages.
     NoCluster,
 }
 
@@ -609,12 +609,30 @@ impl ShmIndex {
         Ok(())
     }
 
+    fn is_empty_index(&self) -> bool {
+        self.buffer_pool.backed_file.max_page_id == 0
+    }
+
+    fn get_latest_page(&self) -> usize {
+        self.buffer_pool.backed_file.max_page_id - 1
+    }
+
+    fn bulk_build_no_cluster(&mut self, chunks: &[Chunk]) {
+        for chunk in chunks.iter() {
+            self.insert_no_cluster(
+                reinterpret_as_u8(chunk.content_vector.as_slice()),
+                chunk.id.try_into().unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
     // TODO: bulk build without LLM summary.
 
     // assume chunks is needed to split
     // every call into this function will build upper one level node
     // returns current level nodes
-    fn bulk_build_recursive(
+    fn cluster_bulk_build_recursive(
         &mut self,
         chunks: &[InternalChunk],
         local_comps: &mut LocalComponent,
@@ -685,10 +703,10 @@ impl ShmIndex {
             .collect();
 
         // tail recursion
-        self.bulk_build_recursive(&higher_level_internal_chunks, local_comps)
+        self.cluster_bulk_build_recursive(&higher_level_internal_chunks, local_comps)
     }
 
-    pub fn bulk_build(&mut self, chunks: &[Chunk], local_comps: &mut LocalComponent) {
+    fn cluster_bulk_build(&mut self, chunks: &[Chunk], local_comps: &mut LocalComponent) {
         // scenario one: one page can store all vectors. In this case we simply store all data to
         // this page.
         if chunks.len() < self.max_page_vectors {
@@ -703,7 +721,7 @@ impl ShmIndex {
                         chunk.id.try_into().unwrap(),
                         reinterpret_as_u8(&chunk.content_vector),
                     )
-                    .unwrap()
+                    .unwrap();
             }
 
             return ();
@@ -780,7 +798,7 @@ impl ShmIndex {
         let mut internal_page_accessor = get_internal_reader_from_buffer(internal_page.get_page());
 
         let top_level_internal_chunks =
-            self.bulk_build_recursive(&first_internal_layer, local_comps);
+            self.cluster_bulk_build_recursive(&first_internal_layer, local_comps);
 
         for chunk in top_level_internal_chunks.iter() {
             internal_page_accessor
@@ -795,9 +813,60 @@ impl ShmIndex {
         self.buffer_pool.flush_all();
     }
 
+    pub fn bulk_build(&mut self, chunks: &[Chunk], local_comps: &mut LocalComponent) {
+        match self.cluster_method {
+            ClusterMethod::NoCluster => self.bulk_build_no_cluster(chunks),
+            ClusterMethod::KMeans | ClusterMethod::GMM => {
+                self.cluster_bulk_build(chunks, local_comps)
+            }
+        }
+    }
+
+    fn review_page_capacity(&mut self, page_id: usize) -> bool {
+        let page = self.buffer_pool.fetch_page(page_id);
+        let page_data = page.get_page();
+        let page_type = read_page_type(page_data);
+        match page_type {
+            page::PageType::LeafPage => {
+                let leaf_page_accessor = get_leaf_reader_from_buffer(page_data);
+                leaf_page_accessor.has_free_slot()
+            }
+            page::PageType::IndexPage => {
+                let internal_page_accessor = get_internal_reader_from_buffer(page_data);
+                internal_page_accessor.has_free_slot()
+            }
+        }
+    }
+
+    /// When the index is in no cluster mode, the new vector is added to the last page, and if
+    /// that page is full, a new page is created.
+    fn insert_no_cluster(&mut self, vector_data: &[u8], vector_id: usize) -> Result<RecordID> {
+        let page_id = if self.is_empty_index() || !self.review_page_capacity(self.get_latest_page())
+        {
+            self.buffer_pool.create_leaf_page()
+        } else {
+            self.get_latest_page()
+        };
+
+        let page = self.buffer_pool.fetch_page(page_id);
+        let page_data = page.get_page();
+        let mut leaf_accessor = get_leaf_reader_from_buffer(page_data);
+        let slot_id = leaf_accessor.append_record(vector_id.try_into().unwrap(), vector_data)?;
+        Ok(slot_id)
+    }
+
+    fn insert_with_cluster(&mut self, vector_data: &[u8], vector_id: usize) -> Result<RecordID> {
+        todo!()
+    }
+
     /// insert one vector into the index
     pub fn insert(&mut self, vector_data: &[u8], vector_id: usize) -> Result<RecordID> {
-        todo!()
+        match self.cluster_method {
+            ClusterMethod::NoCluster => self.insert_no_cluster(vector_data, vector_id),
+            ClusterMethod::KMeans | ClusterMethod::GMM => {
+                self.insert_with_cluster(vector_data, vector_id)
+            }
+        }
     }
 
     // query in one leaf page, should traverse the whole leaf. this is linear complexity.
@@ -821,6 +890,21 @@ impl ShmIndex {
         }
 
         Ok(result_buffer)
+    }
+
+    // If this index is built without internal pages, then we can only traverse the index to find
+    // the top-k vectors.
+    //
+    // assert the root page is a leaf page.
+    fn linear_query(&mut self, target_vector: &[u8], k: usize) -> Result<TopKBuffer> {
+        let mut top_k_buffer = TopKBuffer::new(k);
+        for i in Self::ROOT_PAGE_ID..self.buffer_pool.backed_file.max_page_id {
+            let page = self.buffer_pool.fetch_page(i);
+            let page_data = page.get_page();
+            let page_results = self.query_in_leaf_page(target_vector, page_data, k)?;
+            top_k_buffer.extend_from(&page_results);
+        }
+        Ok(top_k_buffer)
     }
 
     fn query_in_internal_page(
@@ -926,7 +1010,7 @@ impl ShmIndex {
         Ok(top_k_buffer)
     }
 
-    pub fn query(&mut self, target_vector: &[u8], k: usize) -> Result<TopKBuffer> {
+    fn clustered_query(&mut self, target_vector: &[u8], k: usize) -> Result<TopKBuffer> {
         let root_page = self.buffer_pool.fetch_page(Self::ROOT_PAGE_ID);
         let root_page_data = root_page.get_page();
         let root_page_type = read_page_type(root_page_data);
@@ -938,6 +1022,14 @@ impl ShmIndex {
                 k,
                 self.target_similarity,
             ),
+        }
+    }
+
+    /// Query finds the top-k vectors similar to target_vector in the index.
+    pub fn query(&mut self, target_vector: &[u8], k: usize) -> Result<TopKBuffer> {
+        match self.cluster_method {
+            ClusterMethod::NoCluster => self.linear_query(target_vector, k),
+            ClusterMethod::KMeans | ClusterMethod::GMM => self.clustered_query(target_vector, k),
         }
     }
 }
@@ -1026,7 +1118,7 @@ mod tests {
             .map(|chunk| local_comps.store.add_chunk(&chunk).unwrap())
             .collect();
 
-        index.bulk_build(&chunks, &mut local_comps);
+        index.cluster_bulk_build(&chunks, &mut local_comps);
 
         index.persist().unwrap();
     }
@@ -1084,7 +1176,7 @@ mod tests {
             .map(|chunk| local_comps.store.add_chunk(&chunk).unwrap())
             .collect();
 
-        index.bulk_build(&chunks, &mut local_comps);
+        index.cluster_bulk_build(&chunks, &mut local_comps);
 
         index.persist().unwrap();
     }

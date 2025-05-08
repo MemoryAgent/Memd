@@ -14,6 +14,8 @@
 //! | parent page id (usize) |
 //! | vector data (u8) | vector ids (usize) | page ids (usize) |
 //!
+//!
+//! TODO: refactor these code ......
 use anyhow::Result;
 use std::marker::PhantomData;
 
@@ -304,11 +306,15 @@ impl PageAccessor<LeafPageDescriptor> {
         self.write_vector_data(idx, data)
     }
 
-    pub fn append_record(&mut self, id: VecId, data: &[u8]) -> Result<()> {
+    pub fn append_record(&mut self, id: VecId, data: &[u8]) -> Result<RecordID> {
         let current_vectors = self.read_current_vectors();
         assert!(current_vectors < self.read_max_vectors());
         self.write_record(current_vectors, id, data)?;
-        self.write_current_vectors(current_vectors + 1)
+        self.write_current_vectors(current_vectors + 1)?;
+        Ok(RecordID {
+            page_id: self.read_page_id(),
+            slot_id: current_vectors,
+        })
     }
 
     pub fn print_leaf_page_info(&self) {
@@ -320,6 +326,12 @@ impl PageAccessor<LeafPageDescriptor> {
             "Leaf Page: Vector Unit Size: {}, Max Vectors: {}, Current Vectors: {}",
             vector_unit_size, max_vectors, current_vectors
         );
+    }
+
+    pub(crate) fn has_free_slot(&self) -> bool {
+        let current_vectors = self.read_current_vectors();
+        let max_vectors = self.read_max_vectors();
+        current_vectors < max_vectors
     }
 }
 
@@ -430,11 +442,15 @@ impl PageAccessor<InternalPageDescriptor> {
         self.write_child_page_id(idx, page_id)
     }
 
-    pub fn append_record(&mut self, id: VecId, data: &[u8], page_id: usize) -> Result<()> {
+    pub fn append_record(&mut self, id: VecId, data: &[u8], page_id: usize) -> Result<RecordID> {
         let current_vectors = self.read_current_vectors();
         assert!(current_vectors < self.read_max_vectors());
         self.write_record(current_vectors, id, data, page_id)?;
-        self.write_current_vectors(current_vectors + 1)
+        self.write_current_vectors(current_vectors + 1)?;
+        Ok(RecordID {
+            page_id: self.read_page_id(),
+            slot_id: current_vectors,
+        })
     }
 
     pub fn print_internal_page_info(&self) {
@@ -447,6 +463,12 @@ impl PageAccessor<InternalPageDescriptor> {
             "Internal Page: Vector Unit Size: {}, Max Vectors: {}, Current Vectors: {}, Parent Page ID: {}",
             vector_unit_size, max_vectors, current_vectors, parent_page_id
         );
+    }
+
+    pub(crate) fn has_free_slot(&self) -> bool {
+        let current_vectors = self.read_current_vectors();
+        let max_vectors = self.read_max_vectors();
+        current_vectors < max_vectors
     }
 }
 
