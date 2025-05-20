@@ -4,7 +4,10 @@ use std::{
 };
 
 use axum::{http::StatusCode, response::IntoResponse};
-use memd_rag::{component::LocalComponent, method::RAGMethods};
+use memd_rag::{
+    component::{database::Chunk, LocalComponent},
+    method::naive_rag::NaiveRAGOption,
+};
 use serde::{Deserialize, Serialize};
 use tokio::{
     signal::unix::{signal, SignalKind},
@@ -14,9 +17,10 @@ use tokio::{
 use crate::metric::Metrics;
 
 pub struct App {
-    local_comps: LocalComponent,
+    pub local_comps: LocalComponent,
     metrics: Metrics,
-    rag_options: RAGMethods,
+    rag_options: NaiveRAGOption,
+    bulk_insertion_buffer: Vec<Chunk>,
 }
 
 impl App {
@@ -24,12 +28,17 @@ impl App {
         Self {
             local_comps,
             metrics: Metrics::new(),
-            rag_options: RAGMethods::default(),
+            rag_options: NaiveRAGOption::default(),
+            bulk_insertion_buffer: vec![],
         }
     }
 
     pub fn reset(&mut self) {
         self.local_comps.reset();
+    }
+
+    pub fn add_to_buffer(&mut self, chunk: &[Chunk]) {
+        self.bulk_insertion_buffer.extend_from_slice(chunk);
     }
 }
 
@@ -94,7 +103,7 @@ pub async fn shutdown_signal() {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServerMetadata {
-    opt: memd_rag::method::RAGMethods,
+    opt: NaiveRAGOption,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -1,20 +1,27 @@
 use anyhow::{Context, Result};
-use std::{collections::BinaryHeap, path::PathBuf};
+use candle_transformers::models::bert::BertModel;
+use rusqlite::Connection;
+use std::{
+    cmp::max,
+    collections::BinaryHeap,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+use tokenizers::Tokenizer;
 
 use crate::{
     component::{
         bert::encode_single_sentence,
         database::{Chunk, Store},
         deepseek::extract_answer,
-        llm::Llm,
-        LocalComponent,
+        llm::{LocalLlm, LLM},
     },
-    method::cluster::cluster_by_kmeans,
+    method::cluster::{cluster_by_gmm_bic, cluster_by_kmeans, ClusterResult},
 };
 
 use super::{
     buffer_pool::BufferPool,
-    index_file::IndexFile,
+    index_file::{usize_to_summary_method, IndexFile},
     page::{
         self, get_internal_reader_from_buffer, get_leaf_reader_from_buffer, read_page_type,
         RecordID,
@@ -394,22 +401,19 @@ fn reinterpret_as_f32<'a>(slice: &'a [u8]) -> &'a [f32] {
     unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const f32, len) }
 }
 
-fn reinterpret_as_u8(slice: &[f32]) -> &[u8] {
-    assert!(slice.len() % std::mem::size_of::<f32>() == 0);
+/// reinterpret &[f32] as &[u8]
+fn reinterpret_as_u8<'a>(slice: &'a [f32]) -> &'a [u8] {
     unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * 4) }
 }
 
-impl Llm {
-    fn get_summary_prompt(text: &[String]) -> String {
-        let mut prompt =
-            "Please summarize the following text, include as many details as possible:\n"
-                .to_string();
-        for (i, line) in text.iter().enumerate() {
-            prompt.push_str(&format!("{}: {}\n", i + 1, line));
-        }
-        prompt.push_str("Summary:");
-        prompt
+fn get_summary_prompt(text: &[String]) -> String {
+    let mut prompt =
+        "Please summarize the following text, include as many details as possible:\n".to_string();
+    for (i, line) in text.iter().enumerate() {
+        prompt.push_str(&format!("{}: {}\n", i + 1, line));
     }
+    prompt.push_str("Summary:");
+    prompt
 }
 
 // For a internal index, we need to store the summary and its embedding.
@@ -474,31 +478,26 @@ fn insert_internal_relationship(
     Ok(())
 }
 
-// db operations
-
-impl Store {
-    pub fn insert_internal_index(
-        &mut self,
-        index_entry: &InternalIndexEntry,
-    ) -> Result<InternalIndexRow> {
-        let mut conn = self.conn.lock().unwrap();
-        insert_internal_index(&mut conn, index_entry)
-    }
-
-    pub fn insert_internal_relationship(&mut self, parent_id: usize, child_id: i64) -> Result<()> {
-        let mut conn = self.conn.lock().unwrap();
-        insert_internal_relationship(&mut conn, parent_id, child_id)
-    }
-}
-
 /// LLM method uses large language model to summarize the text.
 ///
 /// Centroid method does not summarize the text, but uses the centroid of vectors as the embedding
 /// of internal index.
-#[derive(Clone, Copy, Debug)]
 pub enum SummaryMethod {
-    LLM,
+    LLM {
+        llm: Arc<Mutex<dyn LLM>>,
+        tokenizer: Arc<Mutex<Tokenizer>>,
+        bert: Arc<Mutex<BertModel>>,
+    },
     Centroid,
+}
+
+impl std::fmt::Debug for SummaryMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LLM { .. } => write!(f, "llm"),
+            Self::Centroid => write!(f, "Centroid"),
+        }
+    }
 }
 
 /// We could use two methods for clustering...
@@ -515,16 +514,17 @@ pub enum ClusterMethod {
 
 pub struct ShmIndex {
     buffer_pool: BufferPool,
-    max_page_vectors: usize,
+    database: Arc<Mutex<Connection>>,
     summary_method: SummaryMethod,
     cluster_method: ClusterMethod,
     target_similarity: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ShmIndexOptions {
     /// The path to the file that will be used for backing store.
     pub backed_file: PathBuf,
+    pub database: Arc<Mutex<Connection>>,
     /// The size of the buffer pool.
     pub pool_size: usize,
     /// The size of each page.
@@ -534,6 +534,25 @@ pub struct ShmIndexOptions {
     pub summary_method: SummaryMethod,
     pub cluster_method: ClusterMethod,
     pub target_similarity: f32,
+}
+
+impl Default for ShmIndexOptions {
+    fn default() -> Self {
+        let database_instance = Connection::open_in_memory().unwrap();
+
+        let database = Arc::new(Mutex::new(database_instance));
+
+        Self {
+            backed_file: PathBuf::from("test_index.bin"),
+            database,
+            pool_size: 10,
+            page_size: 4096,
+            vector_unit_size: 4 * 368,
+            summary_method: SummaryMethod::Centroid,
+            cluster_method: ClusterMethod::KMeans,
+            target_similarity: 0.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -554,11 +573,13 @@ impl ShmIndex {
     const ROOT_PAGE_ID: usize = 0;
 
     pub fn new(options: ShmIndexOptions) -> Result<Self> {
+        let summary_method = options.summary_method;
+
         let backed_file = IndexFile::create(
             options.backed_file,
             options.page_size,
             options.vector_unit_size,
-            options.summary_method,
+            &summary_method,
             options.cluster_method,
         )?;
 
@@ -569,35 +590,42 @@ impl ShmIndex {
             options.vector_unit_size,
         );
 
-        let max_page_vectors = page::calculate_max_vectors_in_internal_page(
-            options.page_size,
-            options.vector_unit_size,
-        );
+        let cluster_method = options.cluster_method;
+
+        let target_similarity = options.target_similarity;
+
+        let database = options.database;
 
         Ok(Self {
             buffer_pool,
-            max_page_vectors,
-            summary_method: options.summary_method,
-            cluster_method: options.cluster_method,
-            target_similarity: options.target_similarity,
+            database,
+            summary_method,
+            cluster_method,
+            target_similarity,
         })
     }
 
-    pub fn load(file: PathBuf, pool_size: usize, target_similarity: f32) -> Result<Self> {
+    pub fn load(
+        file: PathBuf,
+        pool_size: usize,
+        target_similarity: f32,
+        database: Arc<Mutex<Connection>>,
+        llm: Option<Arc<Mutex<dyn LLM>>>,
+        tokenizer: Option<Arc<Mutex<Tokenizer>>>,
+        bert: Option<Arc<Mutex<BertModel>>>,
+    ) -> Result<Self> {
         let backed_file = IndexFile::open(file)?;
         let page_size = backed_file.page_size;
         let vector_unit_size = backed_file.vector_unit_size;
-        let summary_method = backed_file.summary_method;
+        let summary_method =
+            usize_to_summary_method(backed_file.summary_method, llm, tokenizer, bert)?;
         let cluster_method = backed_file.cluster_method;
 
         let buffer_pool = BufferPool::new(backed_file, pool_size, page_size, vector_unit_size);
 
-        let max_page_vectors =
-            page::calculate_max_vectors_in_internal_page(page_size, vector_unit_size);
-
         Ok(Self {
             buffer_pool,
-            max_page_vectors,
+            database,
             summary_method,
             cluster_method,
             target_similarity,
@@ -627,17 +655,26 @@ impl ShmIndex {
         }
     }
 
+    // this could be pre-calculated because it does not change
+    // TODO: optimization, low priority
+    fn decide_leaf_k(&mut self, length: usize) -> usize {
+        max(length.div_ceil(self.buffer_pool.get_leaf_max_vectors()), 2)
+    }
+
+    fn decide_internal_k(&mut self, length: usize) -> usize {
+        max(
+            length.div_ceil(self.buffer_pool.get_internal_max_vectors()),
+            2,
+        )
+    }
+
     // TODO: bulk build without LLM summary.
 
     // assume chunks is needed to split
     // every call into this function will build upper one level node
     // returns current level nodes
-    fn cluster_bulk_build_recursive(
-        &mut self,
-        chunks: &[InternalChunk],
-        local_comps: &mut LocalComponent,
-    ) -> Vec<InternalChunk> {
-        if chunks.len() <= self.max_page_vectors {
+    fn cluster_bulk_build_recursive(&mut self, chunks: &[InternalChunk]) -> Vec<InternalChunk> {
+        if chunks.len() <= self.buffer_pool.get_internal_max_vectors() {
             return chunks.to_vec();
         }
 
@@ -646,32 +683,64 @@ impl ShmIndex {
             .map(|chunk| chunk.embedding.as_slice())
             .collect();
 
-        let num_clusters = chunks.len() / 2;
+        let min_clusters = self.decide_internal_k(embeddings.len());
 
-        let cluster_result = cluster_by_kmeans(&embeddings, num_clusters);
+        let ClusterResult {
+            cluster_labels,
+            centroids,
+        } = match self.cluster_method {
+            ClusterMethod::GMM => cluster_by_gmm_bic(&embeddings, min_clusters, min_clusters + 2),
+            ClusterMethod::KMeans => cluster_by_kmeans(&embeddings, min_clusters),
+            ClusterMethod::NoCluster => {
+                unreachable!("using no cluster in cluster mode is unreachable.")
+            }
+        };
 
-        let mut clusters: Vec<Vec<InternalChunk>> = vec![Vec::new(); num_clusters];
+        // group chunks by cluster labels
+        let mut clusters: Vec<Vec<usize>> = vec![Vec::new(); centroids.len()];
 
-        for (i, label) in cluster_result.cluster_labels.iter().enumerate() {
-            clusters[*label].push(chunks[i].clone());
+        for (i, label) in cluster_labels.iter().enumerate() {
+            clusters[*label].push(i);
         }
 
         let higher_level_internal_chunks: Vec<InternalChunk> = clusters
             .iter()
-            .map(|cluster| {
-                let texts: Vec<String> =
-                    cluster.iter().map(|chunk| chunk.summary.clone()).collect();
-                let prompt = Llm::get_summary_prompt(&texts);
-                let summary_whole = local_comps.llm.complete(&prompt).unwrap();
-                let (_, summary) = extract_answer(&summary_whole);
-                let embedding =
-                    encode_single_sentence(&summary, &mut local_comps.tokenizer, &local_comps.bert)
-                        .unwrap();
-                let entry = InternalIndexEntry {
-                    summary: summary.to_string(),
-                    embedding: embedding.to_vec1().unwrap(),
+            .enumerate()
+            .map(|(cluster_id, cluster)| {
+                let (summary, embedding) = match &self.summary_method {
+                    SummaryMethod::LLM {
+                        llm,
+                        tokenizer,
+                        bert,
+                    } => {
+                        let texts: Vec<String> = cluster
+                            .iter()
+                            .map(|chunk_id| chunks[*chunk_id].summary.clone())
+                            .collect();
+                        let prompt = get_summary_prompt(&texts);
+                        let summary = llm.lock().unwrap().llm_complete(&prompt).unwrap();
+
+                        let mut tokenizer = tokenizer.lock().unwrap();
+                        let bert = bert.lock().unwrap();
+
+                        let embedding =
+                            encode_single_sentence(&summary, &mut tokenizer, &bert).unwrap();
+
+                        (summary, embedding.to_vec1().unwrap())
+                    }
+                    SummaryMethod::Centroid => {
+                        ("no summary".to_string(), centroids.row(cluster_id).to_vec())
+                    }
                 };
-                let row = local_comps.store.insert_internal_index(&entry).unwrap();
+
+                let entry = InternalIndexEntry { summary, embedding };
+
+                let row = {
+                    let mut conn = self.database.lock().unwrap();
+
+                    insert_internal_index(&mut conn, &entry)
+                }
+                .unwrap();
 
                 // TODO: maintain parent information
                 let internal_page_id = self.buffer_pool.create_internal_page(0);
@@ -680,15 +749,22 @@ impl ShmIndex {
                     get_internal_reader_from_buffer(internal_page.get_page());
 
                 for chunk in cluster.iter() {
-                    local_comps
-                        .store
-                        .insert_internal_relationship(row.vec_id, chunk.vec_id as i64)
-                        .unwrap();
+                    let mut conn = self.database.lock().unwrap();
+
+                    let current_chunk = &chunks[*chunk];
+
+                    insert_internal_relationship(
+                        &mut conn,
+                        row.vec_id,
+                        current_chunk.vec_id.try_into().unwrap(),
+                    )
+                    .unwrap();
+
                     internal_page_accessor
                         .append_record(
-                            chunk.child_page_id,
-                            reinterpret_as_u8(&chunk.embedding),
-                            chunk.child_page_id,
+                            current_chunk.vec_id,
+                            reinterpret_as_u8(&current_chunk.embedding),
+                            current_chunk.child_page_id,
                         )
                         .unwrap();
                 }
@@ -703,13 +779,13 @@ impl ShmIndex {
             .collect();
 
         // tail recursion
-        self.cluster_bulk_build_recursive(&higher_level_internal_chunks, local_comps)
+        self.cluster_bulk_build_recursive(&higher_level_internal_chunks)
     }
 
-    fn cluster_bulk_build(&mut self, chunks: &[Chunk], local_comps: &mut LocalComponent) {
+    fn cluster_bulk_build(&mut self, chunks: &[Chunk]) {
         // scenario one: one page can store all vectors. In this case we simply store all data to
         // this page.
-        if chunks.len() < self.max_page_vectors {
+        if chunks.len() < self.buffer_pool.get_leaf_max_vectors() {
             let leaf_page_id = self.buffer_pool.create_leaf_page();
             assert_eq!(leaf_page_id, Self::ROOT_PAGE_ID);
             let leaf_page = self.buffer_pool.fetch_page(leaf_page_id);
@@ -732,53 +808,80 @@ impl ShmIndex {
             .map(|chunk| chunk.content_vector.as_slice())
             .collect();
 
-        let cluster_result = match self.cluster_method {
-            ClusterMethod::GMM => todo!(),
-            ClusterMethod::KMeans => todo!(),
-            ClusterMethod::NoCluster => todo!(),
+        let min_clusters = self.decide_leaf_k(embeddings.len());
+
+        let ClusterResult {
+            cluster_labels,
+            centroids,
+        } = match self.cluster_method {
+            ClusterMethod::GMM => cluster_by_gmm_bic(&embeddings, min_clusters, min_clusters + 2),
+            ClusterMethod::KMeans => cluster_by_kmeans(&embeddings, min_clusters),
+            ClusterMethod::NoCluster => {
+                unreachable!("using no cluster in cluster mode is unreachable.")
+            }
         };
 
-        let cluster_result = cluster_by_kmeans(&embeddings, chunks.len() / 2);
-
         // group chunks by cluster labels
-        let mut clusters: Vec<Vec<Chunk>> = vec![Vec::new(); chunks.len() / 2];
-        for (i, label) in cluster_result.cluster_labels.iter().enumerate() {
-            clusters[*label].push(chunks[i].clone());
+        let mut clusters: Vec<Vec<usize>> = vec![Vec::new(); centroids.len()];
+
+        for (i, label) in cluster_labels.iter().enumerate() {
+            clusters[*label].push(i);
         }
 
         let first_internal_layer: Vec<InternalChunk> = clusters
             .iter()
-            .map(|cluster| {
-                let texts: Vec<String> =
-                    cluster.iter().map(|chunk| chunk.content.clone()).collect();
-                let prompt = Llm::get_summary_prompt(&texts);
-                let summary_whole = local_comps.llm.complete(&prompt).unwrap();
-                let (_, summary) = extract_answer(&summary_whole);
-                let embedding =
-                    encode_single_sentence(&summary, &mut local_comps.tokenizer, &local_comps.bert)
-                        .unwrap();
-                let index_entry = InternalIndexEntry {
-                    summary: summary.to_string(),
-                    embedding: embedding.to_vec1().unwrap(),
+            .enumerate()
+            .map(|(cluster_id, cluster)| {
+                let (summary, embedding) = match &self.summary_method {
+                    SummaryMethod::LLM {
+                        llm,
+                        tokenizer,
+                        bert,
+                    } => {
+                        let texts: Vec<String> = cluster
+                            .iter()
+                            .map(|chunk_id| chunks[*chunk_id].content.clone())
+                            .collect();
+                        let prompt = get_summary_prompt(&texts);
+                        let summary = llm.lock().unwrap().llm_complete(&prompt).unwrap();
+
+                        let mut tokenizer = tokenizer.lock().unwrap();
+                        let bert = bert.lock().unwrap();
+
+                        let embedding =
+                            encode_single_sentence(&summary, &mut tokenizer, &bert).unwrap();
+
+                        (summary, embedding.to_vec1().unwrap())
+                    }
+                    SummaryMethod::Centroid => {
+                        ("no summary".to_string(), centroids.row(cluster_id).to_vec())
+                    }
                 };
-                let index_row = local_comps
-                    .store
-                    .insert_internal_index(&index_entry)
-                    .unwrap();
+
+                let index_entry = InternalIndexEntry { summary, embedding };
+                let index_row = {
+                    let mut conn = self.database.lock().unwrap();
+
+                    insert_internal_index(&mut conn, &index_entry)
+                }
+                .unwrap();
 
                 let leaf_page_id = self.buffer_pool.create_leaf_page();
                 let leaf_page = self.buffer_pool.fetch_page(leaf_page_id);
                 let mut leaf_page_accessor = get_leaf_reader_from_buffer(leaf_page.get_page());
 
                 for chunk in cluster.iter() {
-                    local_comps
-                        .store
-                        .insert_internal_relationship(index_row.vec_id, chunk.id)
+                    let mut conn = self.database.lock().unwrap();
+
+                    let current_chunk = &chunks[*chunk];
+
+                    insert_internal_relationship(&mut conn, index_row.vec_id, current_chunk.id)
                         .unwrap();
+
                     leaf_page_accessor
                         .append_record(
-                            chunk.id.try_into().unwrap(),
-                            reinterpret_as_u8(&chunk.content_vector),
+                            current_chunk.id.try_into().unwrap(),
+                            reinterpret_as_u8(&current_chunk.content_vector),
                         )
                         .unwrap();
                 }
@@ -797,8 +900,7 @@ impl ShmIndex {
         let internal_page = self.buffer_pool.fetch_page(internal_page_id);
         let mut internal_page_accessor = get_internal_reader_from_buffer(internal_page.get_page());
 
-        let top_level_internal_chunks =
-            self.cluster_bulk_build_recursive(&first_internal_layer, local_comps);
+        let top_level_internal_chunks = self.cluster_bulk_build_recursive(&first_internal_layer);
 
         for chunk in top_level_internal_chunks.iter() {
             internal_page_accessor
@@ -813,12 +915,14 @@ impl ShmIndex {
         self.buffer_pool.flush_all();
     }
 
-    pub fn bulk_build(&mut self, chunks: &[Chunk], local_comps: &mut LocalComponent) {
+    pub fn bulk_build(&mut self, chunks: &[Chunk]) {
+        // The problem is, the index is part of local_comps. Either we move out these components,
+        // or we pass them as arguments.
+        //
+        // And for consistent interface with usearch, we need to hide them behind implementation details.
         match self.cluster_method {
             ClusterMethod::NoCluster => self.bulk_build_no_cluster(chunks),
-            ClusterMethod::KMeans | ClusterMethod::GMM => {
-                self.cluster_bulk_build(chunks, local_comps)
-            }
+            ClusterMethod::KMeans | ClusterMethod::GMM => self.cluster_bulk_build(chunks),
         }
     }
 
@@ -860,13 +964,28 @@ impl ShmIndex {
     }
 
     /// insert one vector into the index
-    pub fn insert(&mut self, vector_data: &[u8], vector_id: usize) -> Result<RecordID> {
+    fn insert_type_erased(&mut self, vector_data: &[u8], vector_id: usize) -> Result<RecordID> {
         match self.cluster_method {
             ClusterMethod::NoCluster => self.insert_no_cluster(vector_data, vector_id),
             ClusterMethod::KMeans | ClusterMethod::GMM => {
                 self.insert_with_cluster(vector_data, vector_id)
             }
         }
+    }
+
+    fn insert_single(&mut self, embedding: &[f32], vector_id: usize) -> Result<RecordID> {
+        let vector_data = reinterpret_as_u8(embedding);
+        self.insert_type_erased(vector_data, vector_id)
+    }
+
+    pub fn insert(&mut self, chunks: &[Chunk]) -> Result<()> {
+        for chunk in chunks.iter() {
+            self.insert_single(
+                chunk.content_vector.as_slice(),
+                chunk.id.try_into().unwrap(),
+            )?;
+        }
+        Ok(())
     }
 
     // query in one leaf page, should traverse the whole leaf. this is linear complexity.
@@ -1026,11 +1145,20 @@ impl ShmIndex {
     }
 
     /// Query finds the top-k vectors similar to target_vector in the index.
-    pub fn query(&mut self, target_vector: &[u8], k: usize) -> Result<TopKBuffer> {
+    fn query_type_erased(&mut self, target_vector: &[u8], k: usize) -> Result<TopKBuffer> {
         match self.cluster_method {
             ClusterMethod::NoCluster => self.linear_query(target_vector, k),
             ClusterMethod::KMeans | ClusterMethod::GMM => self.clustered_query(target_vector, k),
         }
+    }
+
+    pub fn query(&mut self, target_vector: &[f32], k: usize) -> Result<TopKBuffer> {
+        let vector_data = reinterpret_as_u8(target_vector);
+        self.query_type_erased(vector_data, k)
+    }
+
+    pub fn memory_usage(&self) -> usize {
+        self.buffer_pool.memory_usage()
     }
 }
 
@@ -1042,7 +1170,7 @@ impl Drop for ShmIndex {
 
 #[cfg(test)]
 mod tests {
-    use crate::component::operation;
+    use crate::component::{operation, LocalComponent};
 
     use super::*;
     use std::path::PathBuf;
@@ -1057,15 +1185,16 @@ mod tests {
             summary_method: SummaryMethod::Centroid,
             cluster_method: ClusterMethod::KMeans,
             target_similarity: 0.0,
+            ..Default::default()
         })
         .unwrap();
         let vector = 4.0_f32.to_le_bytes();
-        let id = index.insert(&vector, 0).unwrap();
+        let id = index.insert_type_erased(&vector, 0).unwrap();
         println!("inserted rid: {:?}", id);
         assert_eq!(id.page_id, 0);
         assert_eq!(id.slot_id, 0);
         let target_vector = 4.0_f32.to_le_bytes();
-        let topk = index.query(&target_vector, 1).unwrap();
+        let topk = index.query_type_erased(&target_vector, 1).unwrap();
         println!("topk: {:?}", topk.get_topk());
     }
 
@@ -1079,6 +1208,7 @@ mod tests {
             summary_method: SummaryMethod::Centroid,
             cluster_method: ClusterMethod::KMeans,
             target_similarity: 0.0,
+            ..Default::default()
         })
         .unwrap();
         let mut local_comps = LocalComponent::default();
@@ -1118,7 +1248,7 @@ mod tests {
             .map(|chunk| local_comps.store.add_chunk(&chunk).unwrap())
             .collect();
 
-        index.cluster_bulk_build(&chunks, &mut local_comps);
+        index.cluster_bulk_build(&chunks);
 
         index.persist().unwrap();
     }
@@ -1133,6 +1263,7 @@ mod tests {
             summary_method: SummaryMethod::Centroid,
             cluster_method: ClusterMethod::KMeans,
             target_similarity: 0.0,
+            ..Default::default()
         })
         .unwrap();
         let mut local_comps = LocalComponent::default();
@@ -1176,7 +1307,7 @@ mod tests {
             .map(|chunk| local_comps.store.add_chunk(&chunk).unwrap())
             .collect();
 
-        index.cluster_bulk_build(&chunks, &mut local_comps);
+        index.cluster_bulk_build(&chunks);
 
         index.persist().unwrap();
     }

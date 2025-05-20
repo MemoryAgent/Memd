@@ -157,7 +157,7 @@ pub fn calculate_log_likelihood_score(
 }
 
 pub fn cluster_by_gmm_bic(
-    embeddings: &Vec<Vec<f32>>,
+    embeddings: &Vec<&[f32]>,
     min_clusters: usize,
     max_clusters: usize,
 ) -> ClusterResult {
@@ -223,7 +223,7 @@ pub fn cluster_by_gmm_bic_slice(
 ) -> ClusterResult {
     let data = embeddings
         .chunks_exact(unit_vector_size)
-        .map(|chunk| chunk.to_vec())
+        .map(|chunk| chunk)
         .collect::<Vec<_>>();
 
     cluster_by_gmm_bic(&data, min_clusters, max_clusters)

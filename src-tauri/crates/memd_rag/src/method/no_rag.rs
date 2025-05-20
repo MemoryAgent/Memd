@@ -17,5 +17,5 @@ pub fn query(
 }
 
 pub(super) fn chat(question: &str, local_comps: &mut component::LocalComponent) -> Result<String> {
-    local_comps.llm.complete(&question)
+    local_comps.llm.llm_complete(&question)
 }

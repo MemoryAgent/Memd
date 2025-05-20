@@ -3,7 +3,7 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rusqlite::Connection;
 
 use super::{operation, sqlite::run_migrations};
@@ -48,8 +48,6 @@ pub struct Relation {
 
 pub struct Store {
     pub conn: Mutex<Connection>,
-    text_index: usearch::Index,
-    node_index: usearch::Index,
 }
 
 /// TODO: this should be mutable, is usearch doing it wrong or I understand it wrong?
@@ -65,54 +63,17 @@ impl Default for Store {
     fn default() -> Self {
         let mut conn = Connection::open("test.db").unwrap();
         run_migrations(&mut conn).unwrap();
-        let text_index = usearch::Index::new(&usearch::IndexOptions {
-            dimensions: 384,
-            ..Default::default()
-        })
-        .unwrap();
-        text_index.reserve(100).unwrap();
-        let node_index = usearch::Index::new(&usearch::IndexOptions {
-            dimensions: 384,
-            ..Default::default()
-        })
-        .unwrap();
-        node_index.reserve(100).unwrap();
-        Self {
-            conn: conn.into(),
-            text_index,
-            node_index,
-        }
+
+        Self { conn: conn.into() }
     }
 }
 
 impl Store {
-    pub fn new(db_path: &str, text_index_path: &str, node_index_path: &str) -> Self {
+    pub fn new(db_path: &str) -> Self {
         let mut conn = Connection::open(db_path).unwrap();
         run_migrations(&mut conn).unwrap();
 
-        let text_index = match db_path {
-            ":memory:" => usearch::Index::new(&usearch::IndexOptions::default()).unwrap(),
-            _ => {
-                let index = usearch::Index::new(&usearch::IndexOptions::default()).unwrap();
-                index.load(&text_index_path).unwrap();
-                index
-            }
-        };
-
-        let node_index = match db_path {
-            ":memory:" => usearch::Index::new(&usearch::IndexOptions::default()).unwrap(),
-            _ => {
-                let index = usearch::Index::new(&usearch::IndexOptions::default()).unwrap();
-                index.load(&node_index_path).unwrap();
-                index
-            }
-        };
-
-        Self {
-            conn: conn.into(),
-            text_index,
-            node_index,
-        }
+        Self { conn: conn.into() }
     }
 
     pub fn add_document(&self, doc: &operation::Document) -> Result<Document> {
@@ -143,11 +104,6 @@ impl Store {
             content,
             &embedding_vec,
         )?;
-        insert_to_index(
-            &self.text_index,
-            chunk.id.try_into().unwrap(),
-            &embedding_vec,
-        )?;
         Ok(chunk)
     }
 
@@ -156,11 +112,6 @@ impl Store {
         let entity =
             sqlite::insert_entity(&mut self.conn.lock().unwrap(), &entity.name, &embedding_vec)?;
         sqlite::insert_entity_chunk(&mut self.conn.lock().unwrap(), entity.id, chunk.id)?;
-        insert_to_index(
-            &self.node_index,
-            entity.id.try_into().unwrap(),
-            &embedding_vec,
-        )?;
         Ok(entity)
     }
 
@@ -179,19 +130,6 @@ impl Store {
         )
     }
 
-    pub fn vector_search(&self, query: &Vec<f32>, top_k: usize) -> Result<Vec<(u64, f32)>> {
-        self.text_index
-            .search(&query, top_k)
-            .map(|x| {
-                x.keys
-                    .iter()
-                    .zip(x.distances.iter())
-                    .map(|(x, y)| (*x, *y))
-                    .collect()
-            })
-            .with_context(|| "vector search failed")
-    }
-
     pub fn find_chunk_by_id(&self, id: ChunkId) -> Result<Chunk> {
         let mut conn = self.conn.lock().unwrap();
         sqlite::query_chunk_by_id(&mut conn, id)
@@ -208,40 +146,6 @@ impl Store {
             }
         }
         Ok(entities)
-    }
-
-    pub fn find_entity_ids_by_embedding(
-        &self,
-        embedding: &Vec<f32>,
-        top_k: usize,
-    ) -> Result<Vec<(u64, f32)>> {
-        self.node_index
-            .search(&embedding, top_k)
-            .map(|x| {
-                x.keys
-                    .iter()
-                    .zip(x.distances.iter())
-                    .map(|(x, y)| (*x, *y))
-                    .collect()
-            })
-            .with_context(|| "vector search failed")
-    }
-
-    pub fn find_entitiy_ids_by_embeddings(
-        &self,
-        embeddings: &Vec<Vec<f32>>,
-        top_k: usize,
-    ) -> Result<Vec<(u64, f32)>> {
-        let mut results = Vec::new();
-        for e in embeddings
-            .iter()
-            .map(|embedding| self.find_entity_ids_by_embedding(embedding, top_k))
-        {
-            if let Ok(v) = e {
-                results.extend(v);
-            }
-        }
-        Ok(results)
     }
 
     pub fn find_relation_by_entities(&self, entities: &Vec<Entity>) -> Result<Vec<Relation>> {
@@ -285,13 +189,7 @@ impl Store {
             .collect()
     }
 
-    pub fn get_memory_usage(&self) -> usize {
-        self.text_index.memory_usage() + self.node_index.memory_usage()
-    }
-
     pub fn reset(&mut self) {
-        self.text_index.reset().unwrap();
-        self.node_index.reset().unwrap();
         let mut conn = self.conn.lock().unwrap();
         sqlite::clear_all_tables(&mut conn).unwrap();
     }

@@ -14,7 +14,7 @@ use anyhow::Result;
 
 use super::{
     bert::{encode_single_sentence, normalize_l2},
-    llm::Llm,
+    llm::LocalLlm,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +103,7 @@ pub struct Entity {
 
 pub(crate) async fn chunk_extract_entity(
     Chunk { content, .. }: &Chunk,
-    llm: &Llm,
+    llm: &LocalLlm,
     tokenizer: &mut Tokenizer,
     embedder: &BertModel,
 ) -> Result<Vec<Entity>> {
@@ -139,7 +139,7 @@ impl Relation {
 pub async fn chunk_extract_relation(
     Chunk { content, .. }: &Chunk,
     entities: &Vec<Entity>,
-    llm: &Llm,
+    llm: &LocalLlm,
 ) -> Result<Vec<Relation>> {
     let entity_names = entities.iter().map(|x| x.name.clone()).collect();
     llm.extract_relation(&content, &entity_names)

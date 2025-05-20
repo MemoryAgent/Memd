@@ -1,4 +1,5 @@
 import logging
+from enum import StrEnum
 from typing import Literal, Optional
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings, CliApp
@@ -23,6 +24,12 @@ class PrefEvalTask(BaseModel):
     opt: PrefevalOptions
 
 
+class EvaluationCriterion(StrEnum):
+    BULK_BUILD_EFFICIENCY = "bulk_build_efficiency"
+    QUERY_ACCURACY = "query_accuracy"
+    QUERY_EFFICIENCY = "query_efficiency"
+
+
 BenchmarkTask = RetrievalTask | QATask | PrefEvalTask
 
 
@@ -32,6 +39,10 @@ class BenchConfig(
     cli_prog_name="Personalized LLM model benchmark",
 ):
     benchmark_task: BenchmarkTask = Field(discriminator="kind")
+
+    evaluation_criterion: EvaluationCriterion = Field(
+        EvaluationCriterion.BULK_BUILD_EFFICIENCY
+    )
 
     app_endpoint: str = Field(
         description="the endpoint of your favorite LLM application."

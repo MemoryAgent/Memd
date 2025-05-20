@@ -19,6 +19,45 @@ pub struct NaiveRAGOption {
     pub top_k: usize,
 }
 
+impl Default for NaiveRAGOption {
+    fn default() -> Self {
+        Self {
+            chunk_size: Default::default(),
+            chunk_overlap: Default::default(),
+            top_k: Default::default(),
+        }
+    }
+}
+
+pub async fn chunking(
+    doc: &component::operation::Document,
+    local_comps: &mut component::LocalComponent,
+    opt: &NaiveRAGOption,
+) -> Result<Vec<Chunk>> {
+    let stored_doc = local_comps.store.add_document(&doc)?;
+    let chunks = operation::chunk_document(
+        doc,
+        stored_doc.id,
+        opt.chunk_size,
+        opt.chunk_overlap,
+        &mut local_comps.tokenizer,
+        &local_comps.bert,
+    )
+    .await?;
+    let inserted_chunks = chunks
+        .iter()
+        .map(|c| local_comps.store.add_chunk(c))
+        .collect::<Result<Vec<Chunk>>>()?;
+    Ok(inserted_chunks)
+}
+
+pub async fn bulk_build_index(
+    chunks: &[Chunk],
+    local_comps: &mut component::LocalComponent,
+) -> Result<()> {
+    local_comps.index.bulk_build_chunk(chunks)
+}
+
 pub async fn insert(
     doc: &component::operation::Document,
     local_comps: &mut component::LocalComponent,
@@ -52,8 +91,8 @@ pub fn retrieve(
     )?;
 
     let search_results = local_comps
-        .store
-        .vector_search(&question_embedding.to_vec1()?, top_k)?;
+        .index
+        .query_chunk(&question_embedding.to_vec1()?, top_k)?;
 
     search_results
         .iter()
@@ -149,7 +188,7 @@ pub async fn chat(
     let reranked_chunks = rerank(chunks);
     let prompt = build_rag_prompt(reranked_chunks, question);
     info!("Prompt: {}", prompt);
-    let answer = local_comps.llm.complete(&prompt)?;
+    let answer = local_comps.llm.llm_complete(&prompt)?;
     info!("Answer: {}", answer);
     let (_, answer) = deepseek::extract_answer(&answer);
     Ok(answer.to_string())

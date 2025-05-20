@@ -78,7 +78,9 @@ def opt_to_json(opt: MemdOpt) -> dict:
             return "MemdAgent"
 
     def opt_dump() -> dict | str:
-        if isinstance(opt, (NaiveRAGOptions, MemdAgentOption)):
+        if isinstance(opt, NaiveRAGOptions):
+            return opt.model_dump()
+        elif isinstance(opt, MemdAgentOption):
             return {get_discriminator(opt): opt.model_dump()}
         else:
             return opt
@@ -98,7 +100,7 @@ def rm_open(rm: RemoteModel, additional_metadata: Optional[MemdOpt] = None) -> b
         return True
     raise RuntimeError(
         f"""failed to open remote model {rm.url} with {additional_metadata}.
-        error message: {resp}
+        error message: {resp.content.decode()}
         """
     )
 
@@ -188,3 +190,21 @@ def rm_close(rm: RemoteModel) -> List[PerRequestMetricData]:
             )
         )
     return all_metrics
+
+
+def rm_prepare(rm: RemoteModel, payload: StorePayload) -> bool:
+    assert rm.state == RemoteState.OPEN
+    resp = requests.post(f"{rm.url}/prepare", json=payload.model_dump())
+    if resp.content.decode("utf-8") == "queued":
+        return True
+    print(f"model_dump_json {payload.model_dump_json()}, err {resp.content.decode()}")
+    return False
+
+
+def rm_bulkbuild(rm: RemoteModel) -> bool:
+    assert rm.state == RemoteState.OPEN
+    resp = requests.post(f"{rm.url}/bulk_build")
+    if resp.content.decode("utf-8") == "built":
+        return True
+    print(f"bulk build err {resp.content.decode()}")
+    return False

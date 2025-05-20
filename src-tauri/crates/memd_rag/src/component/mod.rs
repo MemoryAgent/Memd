@@ -1,5 +1,7 @@
 //! component provides common used items for building a RAG system.
 
+use crate::index::MemdIndex;
+
 pub mod bert;
 pub mod cache;
 pub mod database;
@@ -10,6 +12,8 @@ pub mod sqlite;
 // TODO: add phi-4, GLM-edge, Qwen2.5-3B-Instruct, MiniCPM3-4B
 // TODO: as well as Deepseek R1 for baseline comparison
 pub mod deepseek;
+
+pub mod cloud_model;
 
 // TODO: compile llama.cpp in android
 #[cfg(not(target_os = "android"))]
@@ -24,13 +28,13 @@ pub mod llm {
 
     pub struct Llm;
 
-    impl Default for Llm {
+    impl Default for LocalLlm {
         fn default() -> Self {
             Self
         }
     }
 
-    impl Llm {
+    impl LocalLlm {
         pub fn extract_entities(&self, _question: &str) -> Result<Vec<String>> {
             Ok(vec![])
         }
@@ -62,9 +66,10 @@ pub mod llm {
 pub struct LocalComponent {
     pub tokenizer: tokenizers::Tokenizer,
     pub bert: candle_transformers::models::bert::BertModel,
-    pub llm: llm::Llm,
+    pub llm: Box<dyn llm::LLM + Sync + Send>,
     pub cache: Box<dyn cache::VecStore + Sync + Send>,
     pub store: database::Store,
+    pub index: Box<dyn MemdIndex + Sync + Send>,
 }
 
 impl std::fmt::Debug for LocalComponent {
@@ -78,14 +83,23 @@ impl Default for LocalComponent {
         let (bert, tokenizer) =
             bert::build_model_and_tokenizer(None, None).expect("init embedding model failed.");
         let cache = Box::new(cache::InMemCache::new());
-        let llm = llm::Llm::default();
+        let llm = Box::new(llm::LocalLlm::default());
         let store = database::Store::default();
+        let index = Box::new(
+            usearch::new_index(&usearch::IndexOptions {
+                dimensions: 384,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+
         Self {
             tokenizer,
             bert,
             llm,
             cache,
             store,
+            index,
         }
     }
 }

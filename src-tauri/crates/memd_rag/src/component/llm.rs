@@ -9,6 +9,7 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
+use std::fmt::Debug;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -141,16 +142,17 @@ fn llama_test() {
 }
 
 /// A facade for easier usage of LLM related functions.
-pub struct Llm {
+#[derive(Debug)]
+pub struct LocalLlm {
     backend: LlamaBackend,
     model: LlamaModel,
 }
 
-impl Llm {
-    pub fn new() -> Result<Llm> {
+impl LocalLlm {
+    pub fn new() -> Result<LocalLlm> {
         let backend = create_llm_backend()?;
         let model = create_llm_model(&backend)?;
-        Ok(Llm { backend, model })
+        Ok(LocalLlm { backend, model })
     }
 
     pub fn complete(&self, prompt: &str) -> Result<String> {
@@ -169,22 +171,22 @@ impl Llm {
     }
 }
 
-impl Default for Llm {
+impl Default for LocalLlm {
     fn default() -> Self {
-        Llm::new().unwrap()
+        LocalLlm::new().unwrap()
     }
 }
 
 #[test]
 fn test_hello_world() {
-    let llm = Llm::default();
+    let llm = LocalLlm::default();
     let greetings = llm.complete("hello").unwrap();
     println!("{}", greetings)
 }
 
 #[test]
 fn test_two_questions() {
-    let llm = Llm::default();
+    let llm = LocalLlm::default();
 
     let question_one = llm
         .complete("what is the integration of f(x) = x^2?")
@@ -223,11 +225,11 @@ fn test_extract_entity() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let prompt = "Which country does Tolstoy and Tchaikovsky live?";
-    let llm = Llm::default();
+    let llm = LocalLlm::default();
     println!("{:?}", extract_entity(prompt, &llm));
 }
 
-fn extract_entity(q: &str, llm: &Llm) -> Result<Vec<String>> {
+fn extract_entity(q: &str, llm: &LocalLlm) -> Result<Vec<String>> {
     let re_prompt = build_ee_prompt(q);
     let answer = llm.complete(&re_prompt)?;
     info!("raw output {}", answer);
@@ -278,12 +280,12 @@ fn test_re_prompt() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let entities = vec!["Tolstoy".to_string(), "Russia".to_string()];
-    let llm = Llm::default();
+    let llm = LocalLlm::default();
     let pe = get_re_entity("Tolstoy lived in Russia", &entities, &llm).unwrap();
     println!("{:?}", pe);
 }
 
-fn get_re_entity(passage: &str, entities: &Vec<String>, llm: &Llm) -> Result<Vec<Relation>> {
+fn get_re_entity(passage: &str, entities: &Vec<String>, llm: &LocalLlm) -> Result<Vec<Relation>> {
     let prompt = build_re_prompt(passage, entities);
     let answer = llm.complete(&prompt)?;
     info!("raw output {}", answer);
@@ -321,12 +323,12 @@ fn test_parent_prompt() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let entities = vec!["Leo Tolstoy".to_string(), "Victor Hugo".to_string()];
-    let llm = Llm::default();
+    let llm = LocalLlm::default();
     let pe = get_parent_entity(&entities, &llm).unwrap();
     println!("{}", pe);
 }
 
-fn get_parent_entity(v: &Vec<String>, llm: &Llm) -> Result<String> {
+fn get_parent_entity(v: &Vec<String>, llm: &LocalLlm) -> Result<String> {
     let prompt = vec_to_csv(v);
     let p_prompt = build_parent_prompt(&prompt);
     let answer = llm.complete(&p_prompt)?;
@@ -356,7 +358,7 @@ fn chat_complete_prompt(
     topic_entity: &str,
     relations: &Vec<Relation>,
     documents: &Vec<String>,
-    llm: &Llm,
+    llm: &LocalLlm,
 ) -> Result<String> {
     let prompt = build_complete_prompt(q, topic_entity, relations, documents);
     llm.complete(&prompt)
@@ -367,7 +369,7 @@ fn test_complete_prompt() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
-    let llm = Llm::default();
+    let llm = LocalLlm::default();
     let answer = chat_complete_prompt(
         "Where did Tolstoy live",
         "Tolstoy",
@@ -379,7 +381,7 @@ fn test_complete_prompt() {
     println!("{}", answer);
 }
 
-impl Llm {
+impl LocalLlm {
     pub fn extract_entities(&self, text: &str) -> Result<Vec<String>> {
         extract_entity(text, self)
     }
@@ -390,5 +392,15 @@ impl Llm {
 
     pub fn extract_parent(&self, v: &Vec<String>) -> Result<String> {
         get_parent_entity(v, self)
+    }
+}
+
+pub trait LLM {
+    fn llm_complete(&mut self, prompt: &str) -> Result<String>;
+}
+
+impl LLM for LocalLlm {
+    fn llm_complete(&mut self, prompt: &str) -> Result<String> {
+        self.complete(prompt)
     }
 }

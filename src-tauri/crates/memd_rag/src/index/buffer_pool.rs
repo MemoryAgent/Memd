@@ -2,7 +2,10 @@ use anyhow::Result;
 
 use std::collections::HashMap;
 
-use crate::index::page::{create_internal_page_from_buffer, create_leaf_page_from_buffer};
+use crate::index::page::{
+    calculate_max_vectors_in_internal_page, calculate_max_vectors_in_leaf_page,
+    create_internal_page_from_buffer, create_leaf_page_from_buffer,
+};
 
 use super::{index_file::IndexFile, page::read_page_id};
 
@@ -53,6 +56,14 @@ impl BufferPool {
             free_frames,
             metadata: HashMap::new(),
         }
+    }
+
+    pub fn get_internal_max_vectors(&self) -> usize {
+        calculate_max_vectors_in_internal_page(self.page_size, self.vector_unit_size)
+    }
+
+    pub fn get_leaf_max_vectors(&self) -> usize {
+        calculate_max_vectors_in_leaf_page(self.page_size, self.vector_unit_size)
     }
 
     pub fn memory_usage(&self) -> usize {
@@ -294,7 +305,7 @@ mod tests {
             "test.bin",
             4096,
             4,
-            crate::index::executor::SummaryMethod::Centroid,
+            &crate::index::executor::SummaryMethod::Centroid,
             crate::index::executor::ClusterMethod::KMeans,
         )
         .unwrap();
@@ -312,7 +323,7 @@ mod tests {
             "test.bin",
             4096,
             4,
-            crate::index::executor::SummaryMethod::Centroid,
+            &crate::index::executor::SummaryMethod::Centroid,
             crate::index::executor::ClusterMethod::KMeans,
         )
         .unwrap();
@@ -329,7 +340,7 @@ mod tests {
             "test.bin",
             4096,
             4,
-            crate::index::executor::SummaryMethod::Centroid,
+            &crate::index::executor::SummaryMethod::Centroid,
             crate::index::executor::ClusterMethod::KMeans,
         )
         .unwrap();
@@ -359,7 +370,7 @@ mod tests {
             "test.bin",
             4096,
             4,
-            crate::index::executor::SummaryMethod::Centroid,
+            &crate::index::executor::SummaryMethod::Centroid,
             crate::index::executor::ClusterMethod::KMeans,
         )
         .unwrap();

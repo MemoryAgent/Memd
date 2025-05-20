@@ -10,14 +10,17 @@ from config import (
     RetrievalTask,
     QATask,
     PrefEvalTask,
+    EvaluationCriterion,
 )
 
 
-def dispatch_bench(task: BenchmarkTask, rm: RemoteModel):
+def dispatch_bench(
+    task: BenchmarkTask, rm: RemoteModel, evaluation: EvaluationCriterion
+):
     if isinstance(task, RetrievalTask):
-        return bench_beir.bench_retrieve_on(task, rm)
+        return bench_beir.bench_retrieve_on(task, rm, evaluation)
     if isinstance(task, QATask):
-        return bench_beir.bench_on_qa(task, rm)
+        return bench_beir.bench_on_qa(task, rm, evaluation)
     if isinstance(task, PrefEvalTask):
         return bench_prefeval(rm=rm, opt=task.opt)
     raise NotImplementedError("this is unreachable")
@@ -32,7 +35,11 @@ def main():
         handlers=[LoggingHandler()],
     )
     remote_model = RemoteModel(url=config.app_endpoint)
-    benchmark_result = dispatch_bench(task=config.benchmark_task, rm=remote_model)
+    benchmark_result = dispatch_bench(
+        task=config.benchmark_task,
+        rm=remote_model,
+        evaluation=config.evaluation_criterion,
+    )
     print(benchmark_result)
     save_path = Path(config.save_dir)
     import time

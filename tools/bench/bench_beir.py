@@ -42,6 +42,7 @@ def _load_beir_dataset(dataset_path: str, dataset_name: str, download_if_missing
 
 def _dump_corpus(rm: client.RemoteModel, corpus: dict[int, dict[str, str]]) -> bool:
     import tqdm
+
     for i, x in tqdm.tqdm(enumerate(corpus.values())):
         if i > 1500:
             break
@@ -79,15 +80,40 @@ def _evaluate_retrieves(
     performance = client.rm_close(rm)
     # TODO: make this more explicit. currently use whole message from BEIR as the evaluated performance
     return (
-        [],# EvaluateRetrieval.evaluate(qrels=qrel, results=results, k_values=[5]),
+        [],  # EvaluateRetrieval.evaluate(qrels=qrel, results=results, k_values=[5]),
         performance,
     )
+
+
+def _dump_corpus_prepare(
+    rm: client.RemoteModel, corpus: dict[int, dict[str, str]]
+) -> bool:
+    import tqdm
+
+    for i, x in tqdm.tqdm(enumerate(corpus.values())):
+        title = x.get("title", None)
+        content = x.get("text")
+        result = client.rm_prepare(
+            rm, client.StorePayload(title=title, content=content)
+        )
+        if result is False:
+            return False
+    return True
+
+
+def _evaluate_efficiency(rm: client.RemoteModel, corpus: dict):
+    client.rm_open(rm)
+    _dump_corpus_prepare(rm=rm, corpus=corpus)
+    client.rm_bulkbuild(rm)
+    performance = client.rm_close(rm)
+    return performance
 
 
 def _bench_retrieval_on_dataset(
     dataset_name: str,
     dataset_path: str,
     rm: client.RemoteModel,
+    evaluation: config.EvaluationCriterion,
     download_if_missing=False,
 ):
     corpus, queries, qrels = _load_beir_dataset(
@@ -96,87 +122,27 @@ def _bench_retrieval_on_dataset(
         download_if_missing=download_if_missing,
     )
 
+    if evaluation == config.EvaluationCriterion.BULK_BUILD_EFFICIENCY:
+        return _evaluate_efficiency(rm=rm, corpus=corpus)
+
     return _evaluate_retrieves(rm=rm, corpus=corpus, queries=queries, qrel=qrels)
 
 
-# TODO: simplify these code.
-def bench_on_scifact(rm: client.RemoteModel):
+def bench_retrieve_on(
+    task: config.RetrievalTask,
+    rm: client.RemoteModel,
+    evaluation: config.EvaluationCriterion,
+):
     return _bench_retrieval_on_dataset(
-        dataset_name="scifact",
-        dataset_path="./datasets",
-        rm=rm,
-        download_if_missing=True,
-    )
-
-
-def bench_on_quora(rm: client.RemoteModel):
-    return _bench_retrieval_on_dataset(
-        dataset_name="quora",
-        dataset_path="./datasets",
-        rm=rm,
-        download_if_missing=True,
-    )
-
-
-def bench_on_hotpotqa(rm: client.RemoteModel):
-    return _bench_retrieval_on_dataset(
-        dataset_name="hotpotqa",
-        dataset_path="./datasets",
-        rm=rm,
-        download_if_missing=True,
-    )
-
-
-def bench_on_natural_questions(rm: client.RemoteModel):
-    return _bench_retrieval_on_dataset(
-        dataset_name="nq",
-        dataset_path="./datasets",
-        rm=rm,
-        download_if_missing=True,
-    )
-
-
-# TinyQA is a tiny subset of hotpotQA. It is used for testing, not a real benchmark, so it is
-# excluded from all.
-def bench_on_tinyqa(rm: client.RemoteModel):
-    return _bench_retrieval_on_dataset(
-        dataset_name="tinyqa",
+        dataset_name=task.dataset,
         dataset_path="./datasets",
         rm=rm,
         download_if_missing=False,
+        evaluation=evaluation,
     )
 
 
-def bench_on_all_retrieval(rm: client.RemoteModel):
-    return [
-        x(rm)
-        for x in [
-            bench_on_scifact,
-            bench_on_quora,
-            bench_on_hotpotqa,
-            bench_on_natural_questions,
-        ]
-    ]
-
-
-bench_retrievals = {
-    "all": bench_on_all_retrieval,
-    "scifact": bench_on_scifact,
-    "quora": bench_on_quora,
-    "hotpotqa": bench_on_hotpotqa,
-    "nq": bench_on_natural_questions,
-    "tinyqa": bench_on_tinyqa,
-}
-
-
-def bench_retrieve_on(task: config.RetrievalTask, rm: client.RemoteModel):
-    bench_function = bench_retrievals[task.dataset]
-    return bench_function(rm)
-
-
 # bench QA
-
-
 class QADataLoader(GenericDataLoader):
 
     def _load_queries(self):
@@ -274,10 +240,16 @@ def _evaluate_qa_by_llm(
     return correct_count / total_count
 
 
-def bench_on_qa(task: config.QATask, rm: client.RemoteModel):
+def bench_on_qa(
+    task: config.QATask, rm: client.RemoteModel, evaluation: config.EvaluationCriterion
+):
     corpus, queries, _ = _load_qa_dataset(
         dataset_name=task.dataset, dataset_path="./datasets", download_if_missing=True
     )
+
+    if evaluation == config.EvaluationCriterion.BULK_BUILD_EFFICIENCY:
+        return _evaluate_efficiency(rm=rm, corpus=corpus)
+
     if task.llm_judge_secret is None:
         return _evaluate_qa_by_rules(rm=rm, corpus=corpus, queries=queries)
     return _evaluate_qa_by_llm(

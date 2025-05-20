@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub mod cluster;
 mod hippo_rag;
 mod memd_agent;
-mod naive_rag;
+pub mod naive_rag;
 mod no_rag;
 mod raptor;
 mod read_agent;
